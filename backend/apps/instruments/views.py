@@ -14,6 +14,7 @@ from .models import (
     InstrumentStatus,
     Discrepancy,
     DiscrepancySeverity,
+    SavedFilter,
 )
 from .serializers import (
     InstrumentSerializer,
@@ -32,6 +33,7 @@ from .serializers import (
     ApproveReleaseSerializer,
     RejectReleaseSerializer,
     ComplianceHoldSerializer,
+    SavedFilterSerializer,
 )
 from .state_machine import InstrumentStateMachine
 from .engine import run_discrepancy_check, calculate_trust_score
@@ -51,7 +53,7 @@ class InstrumentViewSet(viewsets.ModelViewSet):
     """
     permission_classes = [InstrumentAccessPermission]
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ['reference_number', 'issuing_bank', 'branch_ifsc', 'institution__name', 'institution__aicte_id']
+    search_fields = ['reference_number', 'issuing_bank', 'issuing_branch', 'branch_ifsc', 'institution__name', 'institution__aicte_id']
     ordering_fields = ['created_at', 'amount', 'maturity_date', 'status']
 
     def get_serializer_class(self):
@@ -72,9 +74,79 @@ class InstrumentViewSet(viewsets.ModelViewSet):
         if getattr(user, 'role', None) == 'INSTITUTION':
             if not user.institution_id:
                 return Instrument.objects.none()
-            return qs.filter(institution_id=user.institution_id)
+            qs = qs.filter(institution_id=user.institution_id)
 
-        # Scrutiny Officers, Approving Authority, and Admin see all instruments nationwide
+        # Phase 6: Search and Filter Parameters
+        params = self.request.query_params
+
+        # 1. Institution
+        inst_param = params.get('institution')
+        if inst_param:
+            if inst_param.isdigit():
+                qs = qs.filter(institution_id=int(inst_param))
+            else:
+                qs = qs.filter(institution__name__icontains=inst_param)
+
+        # 2. Bank
+        bank_param = params.get('bank') or params.get('issuing_bank')
+        if bank_param:
+            qs = qs.filter(issuing_bank__icontains=bank_param)
+
+        # 3. Status
+        status_param = params.get('status')
+        if status_param and status_param.upper() != 'ALL':
+            qs = qs.filter(status__iexact=status_param)
+
+        # 4. Amount Range
+        min_amount = params.get('min_amount')
+        if min_amount:
+            try:
+                qs = qs.filter(amount__gte=float(min_amount))
+            except ValueError:
+                pass
+        max_amount = params.get('max_amount')
+        if max_amount:
+            try:
+                qs = qs.filter(amount__lte=float(max_amount))
+            except ValueError:
+                pass
+
+        # 5. Maturity Range
+        mat_from = params.get('maturity_from')
+        if mat_from:
+            qs = qs.filter(maturity_date__gte=mat_from)
+        mat_to = params.get('maturity_to')
+        if mat_to:
+            qs = qs.filter(maturity_date__lte=mat_to)
+
+        # 6. Discrepancy Type / Severity / Has Discrepancies
+        disc_type = params.get('discrepancy_type')
+        if disc_type:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(discrepancies__rule_code__iexact=disc_type, discrepancies__is_resolved=False) |
+                Q(discrepancies__severity__iexact=disc_type, discrepancies__is_resolved=False)
+            ).distinct()
+
+        has_disc = params.get('has_discrepancies')
+        if has_disc is not None:
+            if str(has_disc).lower() in ('true', '1'):
+                qs = qs.filter(discrepancies__is_resolved=False).distinct()
+            elif str(has_disc).lower() in ('false', '0'):
+                qs = qs.exclude(discrepancies__is_resolved=False).distinct()
+
+        # 7. Text Search
+        search = params.get('search')
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(reference_number__icontains=search) |
+                Q(issuing_bank__icontains=search) |
+                Q(issuing_branch__icontains=search) |
+                Q(branch_ifsc__icontains=search) |
+                Q(institution__name__icontains=search)
+            ).distinct()
+
         return qs
 
     def perform_create(self, serializer):
@@ -976,3 +1048,21 @@ class SecureDocumentDownloadView(APIView):
         response['X-Document-SHA256'] = document.sha256_hash
         response['X-Document-Version'] = str(document.version)
         return response
+
+
+class SavedFilterViewSet(viewsets.ModelViewSet):
+    """
+    User-specific saved filters for FDR search and dashboard presets.
+    """
+    serializer_class = SavedFilterSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if not user or not user.is_authenticated:
+            return SavedFilter.objects.none()
+        return SavedFilter.objects.filter(user=user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+

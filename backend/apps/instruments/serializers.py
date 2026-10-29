@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Instrument, Document, FieldSource, Remark, InstrumentStatus
+from .models import Instrument, Document, FieldSource, Remark, InstrumentStatus, SavedFilter
 from apps.common.models import DataProvenanceSource
 
 class FieldSourceSerializer(serializers.ModelSerializer):
@@ -308,3 +308,24 @@ class RejectReleaseSerializer(serializers.Serializer):
 class ComplianceHoldSerializer(serializers.Serializer):
     compliance_hold = serializers.BooleanField(required=True)
     reason = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class SavedFilterSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SavedFilter
+        fields = ['id', 'user', 'name', 'filter_params', 'is_default', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'user', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        user = validated_data.get('user') or self.context['request'].user
+        validated_data['user'] = user
+        if validated_data.get('is_default'):
+            SavedFilter.objects.filter(user=user).update(is_default=False)
+        return SavedFilter.objects.create(**validated_data)
+
+    def update(self, instance, validated_data):
+        user = self.context['request'].user
+        if validated_data.get('is_default'):
+            SavedFilter.objects.filter(user=user).exclude(pk=instance.pk).update(is_default=False)
+        return super().update(instance, validated_data)
+

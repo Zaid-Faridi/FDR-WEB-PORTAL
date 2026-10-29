@@ -5,7 +5,11 @@ from drf_spectacular.views import (
     SpectacularRedocView,
     SpectacularSwaggerView,
 )
-from apps.instruments.views import SecureDocumentDownloadView
+from apps.instruments.views import SecureDocumentDownloadView, SavedFilterViewSet
+from rest_framework.routers import DefaultRouter
+
+saved_filter_router = DefaultRouter()
+saved_filter_router.register(r'', SavedFilterViewSet, basename='saved-filter')
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -28,10 +32,17 @@ urlpatterns = [
     path('api/instruments/', include('apps.instruments.urls')),
     path('api/documents/<int:pk>/download/', SecureDocumentDownloadView.as_view(), name='secure-document-download'),
 
+    # Saved Search & Filter Presets
+    path('api/saved-filters/', include(saved_filter_router.urls)),
+
     # Common Audit & Logs
     path('api/', include('apps.common.urls')),
 
     # Notifications, Reminders, Escalations & Admin Demo Controls
     path('api/', include('apps.notifications.urls')),
+
+    # Phase 6: Dashboards, Analytics, CSV/PDF Reports & Weekly Email
+    path('api/reports/', include('apps.reports.urls')),
 ]
+
 
