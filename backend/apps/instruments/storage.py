@@ -46,6 +46,63 @@ def validate_file_spec(file_obj):
     return True
 
 
+def scan_uploaded_file(file_obj, raw_bytes=None) -> bool:
+    """
+    Phase 7 Security: Pluggable file scanning hook.
+    1. Validates magic byte signatures against expected file extension:
+       - PDF: starts with b'%PDF'
+       - JPEG: starts with b'\xff\xd8\xff'
+       - PNG: starts with b'\x89PNG\r\n\x1a\n'
+    2. Detects dangerous executable headers and embedded malicious scripts:
+       - Windows PE / DOS executable header: b'MZ'
+       - Linux ELF binary header: b'\x7fELF'
+       - Unix shell script: b'#!/'
+       - Embedded HTML/JavaScript payload: b'<script' or b'<?php'
+    Raises ValidationError if any security hazard or signature mismatch is detected.
+    """
+    if isinstance(raw_bytes, str):
+        filename = raw_bytes
+        if hasattr(file_obj, 'getvalue'):
+            content = file_obj.getvalue()
+        elif hasattr(file_obj, 'read'):
+            file_obj.seek(0)
+            content = file_obj.read()
+        elif isinstance(file_obj, bytes):
+            content = file_obj
+        else:
+            content = b''
+    else:
+        filename = getattr(file_obj, 'name', '') or ''
+        if isinstance(raw_bytes, bytes):
+            content = raw_bytes
+        elif hasattr(file_obj, 'getvalue'):
+            content = file_obj.getvalue()
+        elif hasattr(file_obj, 'read'):
+            file_obj.seek(0)
+            content = file_obj.read()
+        else:
+            content = b''
+
+    ext = os.path.splitext(filename.lower())[1]
+
+    # Signature verification
+    if ext == '.pdf' and not content.startswith(b'%PDF'):
+        raise ValidationError("File signature mismatch: File content is not a valid PDF document.")
+    elif ext in ('.jpg', '.jpeg') and not content.startswith(b'\xff\xd8\xff'):
+        raise ValidationError("File signature mismatch: File content is not a valid JPEG image.")
+    elif ext == '.png' and not content.startswith(b'\x89PNG\r\n\x1a\n'):
+        raise ValidationError("File signature mismatch: File content is not a valid PNG image.")
+
+    # Dangerous payload checks
+    first_kb = content[:1024].lower()
+    if content.startswith(b'MZ') or content.startswith(b'\x7fELF') or content.startswith(b'#!/'):
+        raise ValidationError("Security Violation: Executable binary or script headers detected.")
+    if b'<script' in first_kb or b'<?php' in first_kb:
+        raise ValidationError("Security Violation: Malicious embedded script tags detected in document.")
+
+    return True
+
+
 def compute_sha256(raw_bytes: bytes) -> str:
     """Computes SHA-256 hexadecimal hash from raw byte buffer."""
     import hashlib
@@ -81,7 +138,7 @@ def process_and_save_document(
     """
     Core Phase 2 document pipeline:
     1. Validates file type and size.
-    2. Reads plaintext bytes and computes SHA-256 fingerprint.
+    2. Reads plaintext bytes, scans for malware/magic byte tampering, and computes SHA-256 fingerprint.
     3. Detects duplicate fingerprint uploaded under any different instrument.
     4. Applies automated versioning (increments version if document_type exists for instrument).
     5. Encrypts payload at rest using Fernet and saves outside web root.
@@ -94,6 +151,9 @@ def process_and_save_document(
     uploaded_file.seek(0)
     plain_bytes = uploaded_file.read()
     file_size = len(plain_bytes)
+
+    # Security: File scanner hook
+    scan_uploaded_file(uploaded_file, plain_bytes)
 
     # 2. SHA-256 fingerprint
     sha256_hash = compute_sha256(plain_bytes)

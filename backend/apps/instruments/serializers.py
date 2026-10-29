@@ -207,6 +207,39 @@ class InstrumentSerializer(serializers.ModelSerializer):
     def get_release_checklist(self, obj):
         return obj.evaluate_release_checklist()
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        user = getattr(request, 'user', None) if request else None
+
+        # Field-level masking of sensitive bank branch/account details
+        # Privileged roles: SCRUTINY_OFFICER, APPROVING_AUTHORITY, ADMIN
+        is_privileged_officer = bool(
+            user and (
+                getattr(user, 'is_scrutiny_officer', False) or
+                getattr(user, 'is_approving_authority', False) or
+                getattr(user, 'is_admin_user', False) or
+                getattr(user, 'is_superuser', False)
+            )
+        )
+        is_own_institution = bool(
+            user and getattr(user, 'institution_id', None) and getattr(user, 'institution_id', None) == instance.institution_id
+        )
+
+        should_mask = not is_privileged_officer and not is_own_institution
+        if request and request.query_params.get('mask') in ('1', 'true', 'yes'):
+            should_mask = True
+
+        if should_mask:
+            raw_ifsc = data.get('branch_ifsc')
+            if raw_ifsc and len(raw_ifsc) >= 4:
+                data['branch_ifsc'] = raw_ifsc[:4] + ('*' * (len(raw_ifsc) - 4))
+            data['is_bank_details_masked'] = True
+        else:
+            data['is_bank_details_masked'] = False
+
+        return data
+
 
 from apps.institutions.models import Institution
 
