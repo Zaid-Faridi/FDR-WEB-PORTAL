@@ -67,3 +67,11 @@ class InstrumentAccessPermission(permissions.BasePermission):
             return obj.institution_id == user.institution_id
 
         return False
+
+
+class IsOfficerOrAdminRole(permissions.BasePermission):
+    """Allows access to Scrutiny Officers, Approving Authorities, and Admins."""
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and (
+            getattr(request.user, 'role', None) in ['SCRUTINY_OFFICER', 'APPROVING_AUTHORITY', 'ADMIN'] or request.user.is_superuser
+        ))

@@ -364,5 +364,48 @@ export interface TotpSetupResponse {
   username: string;
 }
 
+export interface ImpactMetricsResponse {
+  generated_at: string;
+  effective_date: string;
+  summary: {
+    total_instruments_managed: number;
+    avg_verification_turnaround_days: number;
+    manual_steps_avoided: number;
+    renewals_caught_before_expiry: number;
+    record_accuracy_pct: number;
+    confirmed_instruments_share_pct: number;
+    turnaround_reduction_pct: number;
+  };
+  breakdown: {
+    automated_reminders_dispatched: number;
+    auto_discrepancy_flags_detected: number;
+    ocr_certificates_extracted: number;
+    bank_cbs_queries_executed: number;
+    proactive_expiries_in_flight: number;
+    renewals_successfully_chained: number;
+  };
+  pending_cases: {
+    total_pending: number;
+    under_scrutiny: number;
+    open_discrepancies: number;
+    pending_approval: number;
+    matured_unresolved: number;
+  };
+  baseline_comparison: {
+    assumptions_label: string;
+    benchmark_date: string;
+    metrics: Array<{
+      key: string;
+      label: string;
+      legacy_manual: string;
+      digital_portal: string;
+      improvement: string;
+      favorable: boolean;
+      description: string;
+    }>;
+  };
+}
+
+
 
 

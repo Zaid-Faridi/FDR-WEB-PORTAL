@@ -12,6 +12,7 @@ from rest_framework import permissions, status
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.users.models import UserRole
+from apps.common.permissions import IsOfficerOrAdminRole
 from apps.common.dates import get_effective_date
 from .analytics import get_officer_dashboard_metrics, get_institution_dashboard_metrics
 from .generators import generate_csv_report, generate_pdf_report, REPORT_TITLES
@@ -141,3 +142,18 @@ class SendWeeklySummaryEmailView(APIView):
         effective_date = get_effective_date()
         result = dispatch_weekly_summary_email(effective_date)
         return Response(result, status=status.HTTP_200_OK)
+
+
+class ImpactMetricsView(APIView):
+    """
+    Phase 8: Impact & Automation ROI Metrics API.
+    Measures turnaround time, manual steps avoided, proactive renewals caught,
+    pending queues, and bank-confirmed accuracy vs legacy manual baseline.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsOfficerOrAdminRole]
+
+    def get(self, request):
+        from .impact_metrics import calculate_impact_metrics
+        metrics = calculate_impact_metrics()
+        return Response(metrics, status=status.HTTP_200_OK)
+
