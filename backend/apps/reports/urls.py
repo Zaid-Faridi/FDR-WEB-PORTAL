@@ -9,12 +9,16 @@ from .views import (
     ReportCSVDownloadView,
     ReportPDFDownloadView,
     SendWeeklySummaryEmailView,
+    ImpactMetricsView,
 )
 
 urlpatterns = [
     # Dashboards
     path('officer-dashboard/', OfficerDashboardView.as_view(), name='officer-dashboard'),
     path('institution-dashboard/', InstitutionDashboardView.as_view(), name='institution-dashboard'),
+
+    # Phase 8: Impact & ROI Analytics
+    path('impact-metrics/', ImpactMetricsView.as_view(), name='impact-metrics'),
 
     # Reports Listing & Downloads
     path('list/', ReportMetadataListView.as_view(), name='report-list'),

@@ -21,9 +21,9 @@ logs:
 test:
 	docker compose run --rm backend pytest
 
-# Seed initial admin account and foundational records
+# Seed 25 institutions and ~60 instruments covering all lifecycle scenarios
 seed:
-	docker compose run --rm backend python manage.py seed_data
+	@docker compose exec backend python manage.py seed_data 2>/dev/null || docker compose run --rm backend python manage.py seed_data
 
 # Open backend shell
 shell:
