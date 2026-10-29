@@ -1,0 +1,80 @@
+name: Security Scan & CI
+
+on:
+  push:
+    branches: [ main, feature/*, "feature/**" ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  dependency-audit:
+    name: Dependency Vulnerability Scan & Test Suite
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: aicte_fdr_db
+          POSTGRES_USER: aicte_user
+          POSTGRES_PASSWORD: secure_password_123
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Backend Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pip-audit pytest pytest-django
+
+      - name: Scan Backend Dependencies for Vulnerabilities (pip-audit)
+        run: |
+          echo "Scanning backend dependencies for known CVEs..."
+          pip-audit -r backend/requirements.txt --ignore-vuln CVE-2023-XXXX || true
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Frontend Dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Scan Frontend Dependencies for Vulnerabilities (npm audit)
+        working-directory: frontend
+        run: |
+          echo "Scanning frontend dependencies..."
+          npm audit --audit-level=high || true
+
+      - name: Run Backend Security & Phase 7 Tests
+        env:
+          DJANGO_SECRET_KEY: ci-test-secret-key-32-chars-long-minimum!
+          DJANGO_DEBUG: "True"
+          DATABASE_URL: postgres://aicte_user:secure_password_123@localhost:5432/aicte_fdr_db
+          REDIS_URL: redis://localhost:6379/0
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1
+        run: |
+          cd backend
+          python manage.py migrate
+          pytest -v

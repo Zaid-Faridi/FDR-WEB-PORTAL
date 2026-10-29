@@ -331,4 +331,38 @@ export interface SavedFilterItem {
   updated_at: string;
 }
 
+export interface AuditEntryItem {
+  id: number;
+  actor_username: string;
+  role: string;
+  action: string;
+  object_type: string;
+  object_id: string;
+  object_repr: string;
+  before_values: Record<string, any>;
+  after_values: Record<string, any>;
+  ip_address: string | null;
+  user_agent: string;
+  timestamp: string;
+  previous_hash: string;
+  entry_hash: string;
+}
+
+export interface VerifyChainResponse {
+  valid: boolean;
+  total_verified: number;
+  latest_hash?: string;
+  first_broken_id?: number | null;
+  reason?: string;
+  message?: string;
+}
+
+export interface TotpSetupResponse {
+  totp_enabled: boolean;
+  secret: string;
+  otpauth_uri: string;
+  username: string;
+}
+
+
 

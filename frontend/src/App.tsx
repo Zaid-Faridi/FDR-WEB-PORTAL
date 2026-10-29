@@ -11,6 +11,9 @@ import {
   OfficerDashboardData,
   InstitutionDashboardData,
   SavedFilterItem,
+  AuditEntryItem,
+  VerifyChainResponse,
+  TotpSetupResponse,
 } from './types/provenance';
 
 const USERS = [
@@ -150,20 +153,59 @@ export const App: React.FC = () => {
   const [isSendingWeeklySummary, setIsSendingWeeklySummary] = useState<boolean>(false);
   const [weeklySummaryMsg, setWeeklySummaryMsg] = useState<string | null>(null);
 
+  // Phase 7: Append-Only Cryptographic Audit Log & Security State
+  const [isAuditModalOpen, setIsAuditModalOpen] = useState<boolean>(false);
+  const [auditEntries, setAuditEntries] = useState<AuditEntryItem[]>([]);
+  const [loadingAuditEntries, setLoadingAuditEntries] = useState<boolean>(false);
+  const [verifyChainResult, setVerifyChainResult] = useState<VerifyChainResponse | null>(null);
+  const [isVerifyingChain, setIsVerifyingChain] = useState<boolean>(false);
+  const [auditActionFilter, setAuditActionFilter] = useState<string>('ALL');
+
+  // Phase 7: TOTP 2FA Security State
+  const [isTotpModalOpen, setIsTotpModalOpen] = useState<boolean>(false);
+  const [totpSetupData, setTotpSetupData] = useState<TotpSetupResponse | null>(null);
+  const [totpCodeInput, setTotpCodeInput] = useState<string>('');
+  const [totpLoading, setTotpLoading] = useState<boolean>(false);
+  const [totpStatusMsg, setTotpStatusMsg] = useState<{ text: string; error: boolean } | null>(null);
+  const [pending2faUsername, setPending2faUsername] = useState<string | null>(null);
+  const [pending2faPassword, setPending2faPassword] = useState<string | null>(null);
+  const [login2faCodeInput, setLogin2faCodeInput] = useState<string>('');
+  const [is2faLoginPromptOpen, setIs2faLoginPromptOpen] = useState<boolean>(false);
+  const [login2faError, setLogin2faError] = useState<string>('');
+
+  // Phase 7: Field-Level Masking State
+  const [maskBankDetails, setMaskBankDetails] = useState<boolean>(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const ocrFileInputRef = useRef<HTMLInputElement>(null);
 
   // 1. Authenticate & Fetch Token
-  const loginUser = async (userObj: typeof USERS[0]) => {
+  // 1. Authenticate & Fetch Token
+  const loginUser = async (userObj: typeof USERS[0], totpCode?: string) => {
     setLoading(true);
+    setLogin2faError('');
     try {
+      const payload: Record<string, string> = { username: userObj.username, password: userObj.password };
+      if (totpCode) {
+        payload.totp_code = totpCode;
+      }
       const res = await fetch('/api/auth/token/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: userObj.username, password: userObj.password }),
+        body: JSON.stringify(payload),
       });
+      const data = await res.json();
       if (res.ok) {
-        const data = await res.json();
+        if (data.requires_2fa) {
+          setPending2faUsername(userObj.username);
+          setPending2faPassword(userObj.password);
+          setIs2faLoginPromptOpen(true);
+          return;
+        }
+        setIs2faLoginPromptOpen(false);
+        setLogin2faCodeInput('');
+        setPending2faUsername(null);
+        setPending2faPassword(null);
         setAuthToken(data.access);
         setUserProfile(data.user);
         fetchInstruments(data.access);
@@ -180,6 +222,10 @@ export const App: React.FC = () => {
           fetchSimulatedDateInfo(data.access);
           fetchRules(data.access);
         }
+      } else {
+        if (is2faLoginPromptOpen) {
+          setLogin2faError(data.detail || 'Invalid or expired 2FA verification code.');
+        }
       }
     } catch (err) {
       console.error('Login failed:', err);
@@ -188,11 +234,26 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleComplete2faLogin = () => {
+    if (!pending2faUsername || !pending2faPassword || !login2faCodeInput.trim()) return;
+    const userObj = USERS.find(u => u.username === pending2faUsername) || {
+      username: pending2faUsername,
+      password: pending2faPassword,
+      role: 'ADMIN',
+      label: pending2faUsername
+    };
+    loginUser(userObj, login2faCodeInput.trim());
+  };
+
   // 2. Fetch Instruments
-  const fetchInstruments = async (token: string) => {
+  const fetchInstruments = async (token?: string, overrideMask?: boolean) => {
+    const activeToken = token || authToken;
+    if (!activeToken) return;
+    const shouldMask = overrideMask !== undefined ? overrideMask : maskBankDetails;
+    const maskQuery = shouldMask ? '?mask=true' : '';
     try {
-      const res = await fetch('/api/instruments/', {
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await fetch(`/api/instruments/${maskQuery}`, {
+        headers: { Authorization: `Bearer ${activeToken}` },
       });
       if (res.ok) {
         const data = await res.json();
@@ -209,10 +270,137 @@ export const App: React.FC = () => {
     }
   };
 
+  // Phase 7: Fetch Append-Only Cryptographic Audit Log Entries
+  const fetchAuditEntries = async (token?: string) => {
+    const activeToken = token || authToken;
+    if (!activeToken) return;
+    setLoadingAuditEntries(true);
+    try {
+      const res = await fetch('/api/audit-entries/', {
+        headers: { Authorization: `Bearer ${activeToken}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : (data.results || []);
+        setAuditEntries(list);
+      }
+    } catch (err) {
+      console.error('Failed to load audit entries:', err);
+    } finally {
+      setLoadingAuditEntries(false);
+    }
+  };
+
+  // Phase 7: Cryptographically Verify Audit Hash Chain
+  const handleVerifyAuditChain = async () => {
+    if (!authToken) return;
+    setIsVerifyingChain(true);
+    try {
+      const res = await fetch('/api/audit/verify-chain/', {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      const data = await res.json();
+      setVerifyChainResult(data);
+      // Also refresh entries to show latest states
+      fetchAuditEntries(authToken);
+    } catch (err) {
+      console.error('Chain verification failed:', err);
+      setVerifyChainResult({
+        valid: false,
+        total_verified: 0,
+        reason: 'Network or server communication failure during verification.'
+      });
+    } finally {
+      setIsVerifyingChain(false);
+    }
+  };
+
+  // Phase 7: TOTP 2FA Setup, Enable & Disable
+  const handleInitTotpSetup = async () => {
+    if (!authToken) return;
+    setTotpLoading(true);
+    setTotpStatusMsg(null);
+    try {
+      const res = await fetch('/api/auth/2fa/setup/', {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setTotpSetupData(data);
+      }
+    } catch (err) {
+      console.error('TOTP setup error:', err);
+    } finally {
+      setTotpLoading(false);
+    }
+  };
+
+  const handleEnableTotp = async () => {
+    if (!authToken || !totpCodeInput.trim()) return;
+    setTotpLoading(true);
+    setTotpStatusMsg(null);
+    try {
+      const res = await fetch('/api/auth/2fa/enable/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ code: totpCodeInput.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setTotpStatusMsg({ text: 'Two-factor authentication successfully enabled!', error: false });
+        if (userProfile) {
+          setUserProfile({ ...userProfile, totp_enabled: true });
+        }
+        setTotpCodeInput('');
+      } else {
+        setTotpStatusMsg({ text: data.error || 'Failed to enable 2FA. Verify code and try again.', error: true });
+      }
+    } catch (err) {
+      setTotpStatusMsg({ text: 'Error connecting to 2FA activation service.', error: true });
+    } finally {
+      setTotpLoading(false);
+    }
+  };
+
+  const handleDisableTotp = async () => {
+    if (!authToken) return;
+    setTotpLoading(true);
+    setTotpStatusMsg(null);
+    try {
+      const res = await fetch('/api/auth/2fa/disable/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ code: totpCodeInput.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setTotpStatusMsg({ text: 'Two-factor authentication disabled.', error: false });
+        if (userProfile) {
+          setUserProfile({ ...userProfile, totp_enabled: false });
+        }
+        setTotpSetupData(null);
+        setTotpCodeInput('');
+      } else {
+        setTotpStatusMsg({ text: data.error || 'Failed to disable 2FA.', error: true });
+      }
+    } catch (err) {
+      setTotpStatusMsg({ text: 'Error connecting to 2FA service.', error: true });
+    } finally {
+      setTotpLoading(false);
+    }
+  };
+
   // 3. Refresh single instrument
   const refreshSingleInstrument = async (instId: number) => {
     try {
-      const res = await fetch(`/api/instruments/${instId}/`, {
+      const maskQuery = maskBankDetails ? '?mask=true' : '';
+      const res = await fetch(`/api/instruments/${instId}/${maskQuery}`, {
         headers: { Authorization: `Bearer ${authToken}` },
       });
       if (res.ok) {
@@ -1298,6 +1486,32 @@ export const App: React.FC = () => {
             </button>
           )}
 
+          {/* Phase 7 Cryptographic Audit Hash Chain Button */}
+          {(USERS[currentUserIdx].role === 'ADMIN' || USERS[currentUserIdx].role === 'SCRUTINY_OFFICER') && (
+            <button
+              className="btn-secondary"
+              style={{ fontSize: '0.8rem', padding: '0.45rem 0.8rem', background: 'rgba(168, 85, 247, 0.15)', borderColor: 'rgba(168, 85, 247, 0.4)', color: '#c084fc' }}
+              onClick={() => {
+                setIsAuditModalOpen(true);
+                fetchAuditEntries();
+              }}
+            >
+              🛡️ Audit Chain & Security
+            </button>
+          )}
+
+          {/* Phase 7 TOTP 2FA Security Button */}
+          <button
+            className="btn-secondary"
+            style={{ fontSize: '0.8rem', padding: '0.45rem 0.8rem', background: userProfile?.totp_enabled ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255, 255, 255, 0.05)', borderColor: userProfile?.totp_enabled ? 'rgba(16, 185, 129, 0.4)' : 'rgba(255, 255, 255, 0.15)', color: userProfile?.totp_enabled ? '#34d399' : 'var(--text-muted)' }}
+            onClick={() => {
+              setIsTotpModalOpen(true);
+              handleInitTotpSetup();
+            }}
+          >
+            🔐 2FA {userProfile?.totp_enabled ? 'Active' : 'Setup'}
+          </button>
+
           {health?.status === 'healthy' ? (
             <div className="system-status-pill">
               <span className="status-dot"></span> Core API Operational
@@ -1323,6 +1537,28 @@ export const App: React.FC = () => {
               ({userProfile.institution_name} • ID: {userProfile.aicte_id})
             </span>
           )}
+
+          {/* Phase 7 Field-Level Masking Toggle */}
+          <button
+            type="button"
+            className="btn-secondary"
+            style={{
+              marginLeft: '0.8rem',
+              fontSize: '0.74rem',
+              padding: '0.25rem 0.6rem',
+              background: maskBankDetails ? 'rgba(239, 68, 68, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+              borderColor: maskBankDetails ? 'rgba(239, 68, 68, 0.4)' : 'var(--border-color)',
+              color: maskBankDetails ? '#fca5a5' : 'var(--text-muted)'
+            }}
+            title="Field-level masking: masks sensitive bank branch IFSC and account identifiers for unprivileged roles"
+            onClick={() => {
+              const next = !maskBankDetails;
+              setMaskBankDetails(next);
+              fetchInstruments(authToken, next);
+            }}
+          >
+            {maskBankDetails ? '🔒 Bank IFSC Masked (SBIN***)' : '👁️ Mask Sensitive Bank Details'}
+          </button>
         </div>
 
         {USERS[currentUserIdx].role === 'INSTITUTION' && (
@@ -3924,6 +4160,400 @@ export const App: React.FC = () => {
                 onClick={handleSaveFilter}
               >
                 {isSavingFilter ? 'Saving...' : 'Save Preset'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PHASE 7: CRYPTOGRAPHIC HASH CHAIN & APPEND-ONLY AUDIT LOG MODAL */}
+      {isAuditModalOpen && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: '1080px', width: '95%', maxHeight: '90vh' }}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <span style={{ fontSize: '1.4rem' }}>🛡️</span>
+                <div>
+                  <h3 className="modal-title" style={{ margin: 0 }}>Append-Only Audit Log & Cryptographic Hash Chain</h3>
+                  <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                    SHA-256 Merkle-linked audit nodes • Immutable database triggers prevent ORM/API modification
+                  </div>
+                </div>
+              </div>
+              <button className="modal-close" onClick={() => setIsAuditModalOpen(false)}>&times;</button>
+            </div>
+
+            {/* Audit Chain Verifier Command Bar */}
+            <div style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', padding: '1rem', marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#fff', marginBottom: '0.2rem' }}>
+                  Cryptographic Chain Verification
+                </div>
+                <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                  Traverses every sequential entry, recomputes SHA-256 payload over canonical fields, and asserts predecessor linkage.
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+                <button
+                  className="btn-primary"
+                  style={{ background: 'linear-gradient(135deg, #9333ea, #6366f1)', borderColor: '#a855f7', fontSize: '0.82rem', padding: '0.5rem 1rem' }}
+                  disabled={isVerifyingChain}
+                  onClick={handleVerifyAuditChain}
+                >
+                  {isVerifyingChain ? '⚙️ Recomputing Hashes...' : '⚡ Verify Full Hash Chain'}
+                </button>
+                <button
+                  className="btn-secondary"
+                  style={{ fontSize: '0.82rem', padding: '0.5rem 0.8rem' }}
+                  onClick={() => fetchAuditEntries()}
+                  disabled={loadingAuditEntries}
+                >
+                  🔄 Refresh
+                </button>
+              </div>
+            </div>
+
+            {/* Chain Verification Result Banner */}
+            {verifyChainResult && (
+              <div
+                style={{
+                  padding: '1rem',
+                  borderRadius: 'var(--radius-sm)',
+                  marginBottom: '1.25rem',
+                  border: verifyChainResult.valid ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(239, 68, 68, 0.5)',
+                  background: verifyChainResult.valid ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.12)',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.4rem' }}>
+                  <span style={{ fontSize: '1.2rem' }}>{verifyChainResult.valid ? '✅' : '🚨'}</span>
+                  <strong style={{ color: verifyChainResult.valid ? '#34d399' : '#f87171', fontSize: '0.92rem' }}>
+                    {verifyChainResult.valid ? 'Cryptographic Chain Integrity Confirmed' : 'Tamper Detected in Audit Chain!'}
+                  </strong>
+                </div>
+                {verifyChainResult.valid ? (
+                  <div style={{ fontSize: '0.78rem', color: '#d1fae5', lineHeight: 1.5 }}>
+                    All <strong>{verifyChainResult.total_verified}</strong> audit entries verified against genesis anchor.
+                    {verifyChainResult.latest_hash && (
+                      <div style={{ marginTop: '0.3rem', fontFamily: 'monospace', fontSize: '0.72rem', color: '#93c5fd' }}>
+                        Latest Head Hash: {verifyChainResult.latest_hash}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '0.78rem', color: '#fee2e2', lineHeight: 1.5 }}>
+                    <strong>First Broken Entry ID:</strong> #{verifyChainResult.first_broken_id}
+                    <div style={{ marginTop: '0.3rem' }}><strong>Violation Detail:</strong> {verifyChainResult.reason}</div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Filter and Entry Stats */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                Total Chained Records: <strong>{auditEntries.length}</strong> (Append-Only Log)
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Filter Action:</span>
+                <select
+                  className="form-input"
+                  style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem', width: 'auto' }}
+                  value={auditActionFilter}
+                  onChange={e => setAuditActionFilter(e.target.value)}
+                >
+                  <option value="ALL">All Actions</option>
+                  <option value="FDR_CREATED">FDR Created</option>
+                  <option value="FDR_STATUS_UPDATED">Status Updated</option>
+                  <option value="VERIFIED">Verification</option>
+                  <option value="APPROVED">Approval</option>
+                  <option value="LOGIN_SUCCESS">Login Success</option>
+                  <option value="DOCUMENT_DOWNLOADED">Document Download</option>
+                  <option value="PERMISSION_DENIED">Permission Denied</option>
+                  <option value="ACCOUNT_LOCKOUT">Account Lockout</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Audit Log Table */}
+            <div style={{ overflowX: 'auto', maxHeight: '420px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.74rem' }}>
+                <thead style={{ background: 'rgba(255, 255, 255, 0.04)', position: 'sticky', top: 0, zIndex: 2 }}>
+                  <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
+                    <th style={{ padding: '0.5rem 0.6rem' }}>#</th>
+                    <th style={{ padding: '0.5rem 0.6rem' }}>Timestamp</th>
+                    <th style={{ padding: '0.5rem 0.6rem' }}>Actor (Role)</th>
+                    <th style={{ padding: '0.5rem 0.6rem' }}>Action</th>
+                    <th style={{ padding: '0.5rem 0.6rem' }}>Target Object</th>
+                    <th style={{ padding: '0.5rem 0.6rem' }}>IP</th>
+                    <th style={{ padding: '0.5rem 0.6rem' }}>Cryptographic Hash</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {auditEntries
+                    .filter(e => auditActionFilter === 'ALL' || e.action.includes(auditActionFilter))
+                    .map((entry, idx) => (
+                      <tr
+                        key={entry.id || idx}
+                        style={{
+                          borderBottom: '1px solid rgba(255,255,255,0.03)',
+                          background: idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)'
+                        }}
+                      >
+                        <td style={{ padding: '0.5rem 0.6rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                          #{entry.id}
+                        </td>
+                        <td style={{ padding: '0.5rem 0.6rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                          {entry.timestamp ? new Date(entry.timestamp).toLocaleString() : '-'}
+                        </td>
+                        <td style={{ padding: '0.5rem 0.6rem' }}>
+                          <strong style={{ color: '#fff' }}>{entry.actor_username || 'system'}</strong>
+                          {entry.role && (
+                            <span style={{ display: 'block', fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                              {entry.role}
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ padding: '0.5rem 0.6rem' }}>
+                          <span
+                            className="badge"
+                            style={{
+                              fontSize: '0.68rem',
+                              background: entry.action.includes('DENIED') || entry.action.includes('LOCKOUT')
+                                ? 'rgba(239, 68, 68, 0.2)'
+                                : entry.action.includes('APPROVED') || entry.action.includes('VERIFIED')
+                                ? 'rgba(16, 185, 129, 0.2)'
+                                : 'rgba(59, 130, 246, 0.2)',
+                              color: entry.action.includes('DENIED') || entry.action.includes('LOCKOUT')
+                                ? '#f87171'
+                                : entry.action.includes('APPROVED') || entry.action.includes('VERIFIED')
+                                ? '#34d399'
+                                : '#93c5fd',
+                            }}
+                          >
+                            {entry.action}
+                          </span>
+                        </td>
+                        <td style={{ padding: '0.5rem 0.6rem', color: '#e2e8f0' }}>
+                          {entry.object_repr || `${entry.object_type} #${entry.object_id}`}
+                        </td>
+                        <td style={{ padding: '0.5rem 0.6rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                          {entry.ip_address || '127.0.0.1'}
+                        </td>
+                        <td style={{ padding: '0.5rem 0.6rem', fontFamily: 'monospace', fontSize: '0.7rem' }}>
+                          <div title={`Entry: ${entry.entry_hash}`}>
+                            <span style={{ color: '#a855f7' }}>curr:</span> {entry.entry_hash ? entry.entry_hash.slice(0, 10) : '...'}...
+                          </div>
+                          <div title={`Prev: ${entry.previous_hash}`} style={{ color: 'var(--text-muted)', fontSize: '0.66rem' }}>
+                            <span style={{ color: '#64748b' }}>prev:</span> {entry.previous_hash ? entry.previous_hash.slice(0, 10) : '...'}...
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  {auditEntries.length === 0 && (
+                    <tr>
+                      <td colSpan={7} style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                        {loadingAuditEntries ? 'Loading cryptographic audit records...' : 'No audit entries recorded yet.'}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PHASE 7: TOTP TWO-FACTOR AUTHENTICATION MODAL */}
+      {isTotpModalOpen && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: '480px' }}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{ fontSize: '1.2rem' }}>🔐</span>
+                <h3 className="modal-title" style={{ margin: 0 }}>Two-Factor Authentication (2FA)</h3>
+              </div>
+              <button className="modal-close" onClick={() => setIsTotpModalOpen(false)}>&times;</button>
+            </div>
+
+            <div style={{ marginBottom: '1rem', fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+              Enhance portal security with Time-based One-Time Password (TOTP) compatible with Google Authenticator, Authy, or 1Password.
+            </div>
+
+            {/* Status Indicator */}
+            <div
+              style={{
+                padding: '0.75rem',
+                borderRadius: 'var(--radius-sm)',
+                marginBottom: '1rem',
+                border: userProfile?.totp_enabled ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(255,255,255,0.1)',
+                background: userProfile?.totp_enabled ? 'rgba(16, 185, 129, 0.1)' : 'rgba(255,255,255,0.02)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between'
+              }}
+            >
+              <div>
+                <strong style={{ fontSize: '0.85rem', color: '#fff' }}>Status: </strong>
+                <span style={{ color: userProfile?.totp_enabled ? '#34d399' : 'var(--text-muted)', fontWeight: 600 }}>
+                  {userProfile?.totp_enabled ? 'Active & Protected' : 'Not Configured'}
+                </span>
+              </div>
+              {userProfile?.totp_enabled && (
+                <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.2)', color: '#34d399' }}>2FA ON</span>
+              )}
+            </div>
+
+            {totpStatusMsg && (
+              <div
+                style={{
+                  padding: '0.6rem 0.8rem',
+                  borderRadius: 'var(--radius-sm)',
+                  marginBottom: '1rem',
+                  fontSize: '0.75rem',
+                  background: totpStatusMsg.error ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                  border: totpStatusMsg.error ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid rgba(16, 185, 129, 0.3)',
+                  color: totpStatusMsg.error ? '#fca5a5' : '#86efac'
+                }}
+              >
+                {totpStatusMsg.text}
+              </div>
+            )}
+
+            {!userProfile?.totp_enabled ? (
+              <div>
+                {totpSetupData ? (
+                  <div>
+                    <div style={{ background: 'rgba(0,0,0,0.3)', padding: '0.8rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', marginBottom: '1rem' }}>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>
+                        1. Add this secret key to your Authenticator App:
+                      </div>
+                      <div style={{ fontFamily: 'monospace', fontSize: '1rem', color: 'var(--accent-saffron)', letterSpacing: '2px', wordBreak: 'break-all' }}>
+                        {totpSetupData.secret}
+                      </div>
+                      <div style={{ marginTop: '0.4rem', fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                        URI: <code style={{ color: '#93c5fd' }}>{totpSetupData.otpauth_uri}</code>
+                      </div>
+                    </div>
+
+                    <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+                      <label className="form-label">2. Enter 6-digit Code from Authenticator App *</label>
+                      <input
+                        type="text"
+                        className="form-input"
+                        placeholder="123456"
+                        maxLength={6}
+                        value={totpCodeInput}
+                        onChange={e => setTotpCodeInput(e.target.value)}
+                        style={{ fontFamily: 'monospace', fontSize: '1.2rem', textAlign: 'center', letterSpacing: '4px' }}
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      style={{ width: '100%', padding: '0.6rem' }}
+                      disabled={totpCodeInput.length < 6 || totpLoading}
+                      onClick={handleEnableTotp}
+                    >
+                      {totpLoading ? 'Activating...' : 'Activate 2FA'}
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    style={{ width: '100%', padding: '0.6rem' }}
+                    onClick={handleInitTotpSetup}
+                    disabled={totpLoading}
+                  >
+                    {totpLoading ? 'Generating Key...' : 'Enroll in Two-Factor Auth'}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div>
+                <div style={{ marginBottom: '1rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                  To deactivate two-factor authentication, enter a valid 6-digit code from your authenticator:
+                </div>
+                <div className="form-group" style={{ marginBottom: '1rem' }}>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Enter current 6-digit code"
+                    maxLength={6}
+                    value={totpCodeInput}
+                    onChange={e => setTotpCodeInput(e.target.value)}
+                    style={{ fontFamily: 'monospace', textAlign: 'center', letterSpacing: '3px' }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  style={{ width: '100%', padding: '0.6rem', color: '#f87171', borderColor: 'rgba(239,68,68,0.4)' }}
+                  disabled={totpLoading}
+                  onClick={handleDisableTotp}
+                >
+                  {totpLoading ? 'Deactivating...' : 'Deactivate Two-Factor Authentication'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* PHASE 7: 2FA LOGIN PROMPT MODAL */}
+      {is2faLoginPromptOpen && (
+        <div className="modal-overlay">
+          <div className="modal-content" style={{ maxWidth: '400px' }}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{ fontSize: '1.2rem' }}>🔐</span>
+                <h3 className="modal-title" style={{ margin: 0 }}>Two-Factor Verification</h3>
+              </div>
+              <button className="modal-close" onClick={() => setIs2faLoginPromptOpen(false)}>&times;</button>
+            </div>
+
+            <div style={{ marginBottom: '1rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+              This account has Two-Factor Authentication enabled. Enter the 6-digit verification code from your authenticator app.
+            </div>
+
+            {login2faError && (
+              <div style={{ padding: '0.6rem', borderRadius: 'var(--radius-sm)', background: 'rgba(239, 68, 68, 0.15)', color: '#fca5a5', fontSize: '0.74rem', marginBottom: '1rem' }}>
+                {login2faError}
+              </div>
+            )}
+
+            <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+              <input
+                type="text"
+                className="form-input"
+                placeholder="000000"
+                maxLength={6}
+                value={login2faCodeInput}
+                onChange={e => setLogin2faCodeInput(e.target.value)}
+                autoFocus
+                style={{ fontFamily: 'monospace', fontSize: '1.4rem', textAlign: 'center', letterSpacing: '6px' }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.6rem' }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                style={{ flex: 1 }}
+                onClick={() => setIs2faLoginPromptOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                style={{ flex: 1 }}
+                disabled={login2faCodeInput.length < 6 || loading}
+                onClick={handleComplete2faLogin}
+              >
+                {loading ? 'Verifying...' : 'Verify & Sign In'}
               </button>
             </div>
           </div>
