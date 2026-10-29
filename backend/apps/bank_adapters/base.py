@@ -59,10 +59,32 @@ class BankVerificationAdapter(ABC):
     is_mock: bool = False
 
     @abstractmethod
-    def verify_fdr(self, request: FDRVerificationRequest) -> FDRVerificationResponse:
+    def verify(self, fdr_number: str, bank: str) -> Dict[str, Any]:
         """
         Verify the FDR instrument with the issuing bank branch or CBS.
-        Returns bank-confirmed details and any discrepancy flags.
+        Must return a structured dictionary containing:
+        - status: 'CONFIRMED' | 'DISCREPANCY_DETECTED' | 'NOT_FOUND' | 'SYSTEM_ERROR'
+        - fdr_number: str
+        - bank: str
+        - confirmed_amount: float or None
+        - confirmed_issue_date: str or None (YYYY-MM-DD)
+        - confirmed_maturity_date: str or None (YYYY-MM-DD)
+        - lien_marked: bool
+        - lien_in_favor_of: str or None
+        - joint_holder: str or None
+        - bank_reference_id: str
+        - verified_at: str
+        - adapter_name: str
+        - is_mock: bool
+        - discrepancies: list of str
+        - raw_payload: dict
+        """
+        pass
+
+    @abstractmethod
+    def verify_fdr(self, request: FDRVerificationRequest) -> FDRVerificationResponse:
+        """
+        Detailed verification request interface for full FDRVerificationRequest.
         """
         pass
 

@@ -29,7 +29,77 @@ Production-minded monorepo prototype for the **AICTE Regulation Bureau**, managi
 
 2. **Pluggable Bank Verification**:
    All bank inquiries operate through the `BankVerificationAdapter` interface (`apps.bank_adapters.base.BankVerificationAdapter`).
-   The portal includes a clearly labelled sandbox mock: `apps.bank_adapters.mock_adapter.MockBankVerificationAdapter`.
+   The portal includes a clearly labelled sandbox mock: `apps.bank_adapters.mock_adapter.MockBankAdapter` (`MockBankVerificationAdapter`).
+
+### How a Real Bank API Plugs In
+To integrate a real Core Banking System (CBS), SFMS, or open banking gateway (e.g. SBI e-Treasury, PNB Open Banking, or ICICI Corporate API):
+
+1. **Subclass `BankVerificationAdapter`**:
+   Create a module under `backend/apps/bank_adapters/` (e.g., `sbi_adapter.py`):
+   ```python
+   import requests
+   from apps.bank_adapters.base import BankVerificationAdapter, FDRVerificationRequest, FDRVerificationResponse
+
+   class SBICoreBankingAdapter(BankVerificationAdapter):
+       adapter_name = "State Bank of India CBS API Gateway"
+       is_mock = False
+
+       def __init__(self):
+           self.api_url = settings.SBI_API_ENDPOINT
+           self.client_id = settings.SBI_CLIENT_ID
+           self.cert_path = settings.SBI_CLIENT_CERT_PATH
+
+       def verify(self, fdr_number: str, bank: str) -> dict:
+           # Call bank REST / mTLS API
+           payload = {"fdr_reference": fdr_number, "bank_identifier": bank}
+           response = requests.post(f"{self.api_url}/v1/fdr/verify", json=payload, cert=self.cert_path, timeout=10)
+           data = response.json()
+           return {
+               "status": "CONFIRMED" if data.get("is_valid") else "NOT_FOUND",
+               "fdr_number": fdr_number,
+               "bank": bank,
+               "confirmed_amount": data.get("deposit_amount"),
+               "confirmed_issue_date": data.get("issue_date"),
+               "confirmed_maturity_date": data.get("maturity_date"),
+               "lien_marked": data.get("lien_registered_aicte", False),
+               "lien_in_favor_of": data.get("lien_holder"),
+               "bank_reference_id": data.get("cbs_txn_ref"),
+               "verified_at": datetime.now().isoformat(),
+               "adapter_name": self.adapter_name,
+               "is_mock": False,
+               "discrepancies": data.get("reconciliation_errors", []),
+               "raw_payload": data,
+           }
+
+       def verify_fdr(self, request: FDRVerificationRequest) -> FDRVerificationResponse:
+           # Optional detailed wrapper for full request objects
+           ...
+
+       def check_lien_status(self, fdr_number: str, branch_ifsc: str):
+           # Specialized lien inquiry
+           ...
+   ```
+
+2. **Configure Environment Variable**:
+   In `.env` or production deployment configuration:
+   ```bash
+   BANK_ADAPTER_CLASS=apps.bank_adapters.sbi_adapter.SBICoreBankingAdapter
+   ```
+   The `get_bank_adapter()` factory in `apps/bank_adapters/factory.py` dynamically imports and instantiates the configured adapter.
+
+---
+
+### Rule-Based Discrepancy & Trust Score Engine
+Phase 3 introduces an automated regulatory discrepancy engine with severity ratings (`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`):
+- **Duplicate Checks**: Duplicate FDR certificate reference number across institutions; duplicate SHA-256 document fingerprints.
+- **Tenure & Date Logic**: Maturity date on or prior to issue date; issue date in future; tenure < 1 year.
+- **Regulatory Norms**: Deposit amount below mandatory AICTE category minimums (e.g., ₹1 Crore for Technical Campus, ₹50 Lakhs for Engineering, ₹35 Lakhs for Management/Pharmacy, ₹25 Lakhs for Polytechnic).
+- **Lien & Document Integrity**: Unmarked AICTE lien; missing bank confirmation letter or joint pledge deed; missing FDR scan.
+- **Bank Reconciliation**: Discrepancies between claimed vs bank-confirmed amount, dates, or missing bank records.
+- **Automated Trust Score**: A composite score (0-100) reflecting bank confirmation share (40%), discrepancy-free cleanliness (40%), and document completeness (20%).
+- **Optical Character Recognition (OCR)**: `pytesseract`-powered scan text extraction to pre-fill submission forms and identify OCR vs typed mismatches.
+
+---
 
 3. **Audit Trail**:
    Every state change writes an immutable audit record (`AuditLog`) capturing actor, role, action, previous state, new state, IP address, and timestamp.

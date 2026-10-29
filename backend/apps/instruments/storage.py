@@ -64,6 +64,13 @@ def decrypt_content(encrypted_bytes: bytes) -> bytes:
     return fernet.decrypt(encrypted_bytes)
 
 
+def decrypt_document_bytes(storage_path: str) -> bytes:
+    """Reads ciphertext from disk and returns decrypted plaintext bytes."""
+    with open(storage_path, 'rb') as f:
+        encrypted = f.read()
+    return decrypt_content(encrypted)
+
+
 def process_and_save_document(
     *,
     uploaded_file,

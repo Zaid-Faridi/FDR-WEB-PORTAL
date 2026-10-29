@@ -58,11 +58,28 @@ export interface RemarkItem {
   created_at: string;
 }
 
+export interface DiscrepancyItem {
+  id: number;
+  instrument: number;
+  rule_code: string;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+  title: string;
+  description: string;
+  details: Record<string, any>;
+  is_resolved: boolean;
+  resolved_by?: number | null;
+  resolved_by_username?: string | null;
+  resolved_at?: string | null;
+  resolution_note?: string;
+  created_at: string;
+}
+
 export interface InstrumentItem {
   id: number;
   institution: number;
   institution_name: string;
   institution_aicte_id: string;
+  institution_type?: string;
   instrument_type: string;
   reference_number: string;
   issuing_bank: string;
@@ -74,8 +91,11 @@ export interface InstrumentItem {
   lien_in_favour_of_aicte: boolean;
   joint_holder_name: string;
   status: InstrumentStatus;
+  trust_score: number;
+  ocr_extracted_data?: Record<string, any>;
   field_sources: FieldSourceItem[];
   documents: DocumentItem[];
+  discrepancies: DiscrepancyItem[];
   remarks: RemarkItem[];
   claimed_vs_confirmed: Record<string, { claimed: any; confirmed: any }>;
   created_at: string;

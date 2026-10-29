@@ -78,11 +78,37 @@ class RemarkSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'author', 'role', 'created_at']
 
 
+class DiscrepancySerializer(serializers.ModelSerializer):
+    resolved_by_username = serializers.CharField(source='resolved_by.username', read_only=True)
+
+    class Meta:
+        from .models import Discrepancy
+        model = Discrepancy
+        fields = [
+            'id',
+            'instrument',
+            'rule_code',
+            'severity',
+            'title',
+            'description',
+            'details',
+            'is_resolved',
+            'resolved_by',
+            'resolved_by_username',
+            'resolved_at',
+            'resolution_note',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'created_at']
+
+
 class InstrumentSerializer(serializers.ModelSerializer):
     institution_name = serializers.CharField(source='institution.name', read_only=True)
     institution_aicte_id = serializers.CharField(source='institution.aicte_id', read_only=True)
+    institution_type = serializers.CharField(source='institution.institution_type', read_only=True)
     field_sources = FieldSourceSerializer(many=True, read_only=True)
     documents = DocumentSerializer(many=True, read_only=True)
+    discrepancies = DiscrepancySerializer(many=True, read_only=True)
     remarks = serializers.SerializerMethodField()
     claimed_vs_confirmed = serializers.SerializerMethodField()
 
@@ -93,6 +119,7 @@ class InstrumentSerializer(serializers.ModelSerializer):
             'institution',
             'institution_name',
             'institution_aicte_id',
+            'institution_type',
             'instrument_type',
             'reference_number',
             'issuing_bank',
@@ -104,15 +131,18 @@ class InstrumentSerializer(serializers.ModelSerializer):
             'lien_in_favour_of_aicte',
             'joint_holder_name',
             'status',
+            'trust_score',
+            'ocr_extracted_data',
             'field_sources',
             'documents',
+            'discrepancies',
             'remarks',
             'claimed_vs_confirmed',
             'created_by',
             'created_at',
             'updated_at',
         ]
-        read_only_fields = ['id', 'created_by', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'trust_score', 'created_by', 'created_at', 'updated_at']
 
     def get_remarks(self, obj):
         request = self.context.get('request')
@@ -193,6 +223,15 @@ class VerifyActionSerializer(serializers.Serializer):
 class DiscrepancyActionSerializer(serializers.Serializer):
     reason = serializers.CharField(required=True)
     field_name = serializers.CharField(required=False, allow_blank=True, default='')
+    severity = serializers.ChoiceField(choices=['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'], default='HIGH')
+
+
+class ResolveDiscrepancySerializer(serializers.Serializer):
+    resolution_note = serializers.CharField(required=True)
+
+
+class OCRScanRequestSerializer(serializers.Serializer):
+    file = serializers.FileField(required=True)
 
 
 class ReleaseDecisionSerializer(serializers.Serializer):

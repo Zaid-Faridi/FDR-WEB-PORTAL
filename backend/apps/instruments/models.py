@@ -66,6 +66,15 @@ class Instrument(models.Model):
         default=InstrumentStatus.SUBMITTED,
         db_index=True
     )
+    trust_score = models.IntegerField(
+        default=0,
+        help_text="Automated Trust Score (0-100) based on bank confirmation, discrepancy clean state, and documents"
+    )
+    ocr_extracted_data = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Data extracted via pytesseract OCR from uploaded FDR certificate scan"
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -262,3 +271,57 @@ class Remark(models.Model):
 
     def __str__(self):
         return f"Remark by {self.author.username} ({self.role}) on {self.instrument.reference_number}"
+
+
+class DiscrepancySeverity(models.TextChoices):
+    CRITICAL = 'CRITICAL', 'Critical'
+    HIGH = 'HIGH', 'High'
+    MEDIUM = 'MEDIUM', 'Medium'
+    LOW = 'LOW', 'Low'
+
+
+class Discrepancy(models.Model):
+    """
+    Structured discrepancy flag detected by rule engine or raised by scrutiny officer.
+    """
+    instrument = models.ForeignKey(
+        Instrument,
+        on_delete=models.CASCADE,
+        related_name='discrepancies'
+    )
+    rule_code = models.CharField(
+        max_length=100,
+        db_index=True,
+        help_text="Machine rule code e.g. DUPLICATE_FDR_NUMBER, AMOUNT_MISMATCH_BANK, etc."
+    )
+    severity = models.CharField(
+        max_length=20,
+        choices=DiscrepancySeverity.choices,
+        default=DiscrepancySeverity.HIGH,
+        db_index=True
+    )
+    title = models.CharField(max_length=255)
+    description = models.TextField()
+    details = models.JSONField(default=dict, blank=True)
+    is_resolved = models.BooleanField(default=False, db_index=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='resolved_discrepancies'
+    )
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolution_note = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['instrument', 'is_resolved']),
+            models.Index(fields=['severity', 'is_resolved']),
+        ]
+
+    def __str__(self):
+        status = "RESOLVED" if self.is_resolved else "UNRESOLVED"
+        return f"[{self.severity}] {self.title} ({self.instrument.reference_number}) - {status}"
