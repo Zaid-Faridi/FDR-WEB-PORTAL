@@ -30,4 +30,8 @@ urlpatterns = [
 
     # Common Audit & Logs
     path('api/', include('apps.common.urls')),
+
+    # Notifications, Reminders, Escalations & Admin Demo Controls
+    path('api/', include('apps.notifications.urls')),
 ]
+

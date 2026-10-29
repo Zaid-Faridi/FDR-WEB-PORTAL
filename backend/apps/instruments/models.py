@@ -249,7 +249,9 @@ class Remark(models.Model):
     )
     author = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         related_name='remarks'
     )
     role = models.CharField(max_length=50, blank=True)
@@ -265,12 +267,17 @@ class Remark(models.Model):
         ordering = ['-created_at']
 
     def save(self, *args, **kwargs):
-        if self.author and not self.role:
-            self.role = getattr(self.author, 'role', '')
+        if getattr(self, 'author_id', None) and not self.role:
+            try:
+                self.role = getattr(self.author, 'role', '')
+            except Exception:
+                pass
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"Remark by {self.author.username} ({self.role}) on {self.instrument.reference_number}"
+        author_name = self.author.username if self.author else 'System'
+        return f"Remark by {author_name} ({self.role}) on {self.instrument.reference_number}"
+
 
 
 class DiscrepancySeverity(models.TextChoices):

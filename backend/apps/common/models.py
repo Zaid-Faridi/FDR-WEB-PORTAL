@@ -36,3 +36,22 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"[{self.timestamp.strftime('%Y-%m-%d %H:%M:%S')}] {self.actor_username} - {self.action} on {self.entity_type} #{self.entity_id}"
+
+
+class SystemSetting(models.Model):
+    """
+    Global system settings, including demo-only simulated date.
+    """
+    key = models.CharField(max_length=100, unique=True, db_index=True)
+    value = models.JSONField(default=dict)
+    description = models.CharField(max_length=255, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by_username = models.CharField(max_length=150, blank=True, default='system')
+
+    class Meta:
+        verbose_name = 'System Setting'
+        verbose_name_plural = 'System Settings'
+
+    def __str__(self):
+        return f"{self.key} = {self.value}"
+

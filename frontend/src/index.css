@@ -823,3 +823,137 @@ body {
   border-bottom-color: var(--accent-saffron);
 }
 
+/* Phase 4: Time Travel Demo Bar */
+.time-travel-bar {
+  background: linear-gradient(90deg, rgba(139, 92, 246, 0.18), rgba(245, 158, 11, 0.12));
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 1.25rem;
+  margin-bottom: 1.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.sim-active-badge {
+  background: rgba(245, 158, 11, 0.2);
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  color: #fbbf24;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  animation: pulse 2s infinite;
+}
+
+.sim-real-badge {
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: #34d399;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+}
+
+/* Phase 4: Notification Bell & Badge */
+.notif-bell-btn {
+  position: relative;
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid var(--border-color);
+  color: #fff;
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.75rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  transition: all 0.2s ease;
+}
+
+.notif-bell-btn:hover {
+  background: #1e293b;
+  border-color: var(--accent-saffron);
+}
+
+.notif-badge-count {
+  background: #ef4444;
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 0.1rem 0.38rem;
+  border-radius: 999px;
+}
+
+/* Phase 4: Notification Cards */
+.notif-card {
+  padding: 0.9rem 1.1rem;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  margin-bottom: 0.65rem;
+  transition: all 0.15s ease;
+}
+
+.notif-card.is-unread {
+  background: rgba(59, 130, 246, 0.06);
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+.notif-channel-pill {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+.notif-channel-sms {
+  background: rgba(16, 185, 129, 0.18);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.notif-channel-email {
+  background: rgba(56, 189, 248, 0.18);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+}
+
+.notif-channel-inapp {
+  background: rgba(139, 92, 246, 0.18);
+  color: #c084fc;
+  border: 1px solid rgba(139, 92, 246, 0.4);
+}
+
+.notif-type-pill {
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 0.15rem 0.45rem;
+  border-radius: 4px;
+}
+
+.notif-type-reminder {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+}
+
+.notif-type-escalation {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+}
+
+.notif-type-overdue {
+  background: rgba(220, 38, 38, 0.25);
+  color: #ff6b6b;
+}
+
+.notif-type-status {
+  background: rgba(59, 130, 246, 0.18);
+  color: #60a5fa;
+}
+
+

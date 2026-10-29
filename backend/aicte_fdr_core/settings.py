@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     'apps.instruments.apps.InstrumentsConfig',
     'apps.core.apps.CoreConfig',
     'apps.bank_adapters.apps.BankAdaptersConfig',
+    'apps.notifications.apps.NotificationsConfig',
 ]
 
 MIDDLEWARE = [
@@ -189,3 +190,22 @@ SECURE_STORAGE_ENCRYPTION_KEY = os.getenv('SECURE_STORAGE_ENCRYPTION_KEY', 'MAQA
 MAX_UPLOAD_SIZE_BYTES = 15 * 1024 * 1024  # 15 MB limit
 ALLOWED_DOCUMENT_EXTENSIONS = ['.pdf', '.jpg', '.jpeg', '.png']
 ALLOWED_DOCUMENT_MIME_TYPES = ['application/pdf', 'image/jpeg', 'image/png']
+
+# Email Configuration (Dev console backend by default)
+EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'alerts@aicte-india.org')
+
+# Environment & Demo Simulated Date Guard
+ENVIRONMENT = os.getenv('ENVIRONMENT', 'development')
+ALLOW_SIMULATED_DATE = os.getenv('ALLOW_SIMULATED_DATE', 'True').lower() in ('true', '1', 'yes')
+
+# Celery Beat Periodic Tasks
+from celery.schedules import crontab
+CELERY_BEAT_SCHEDULE = {
+    'daily-fdr-lifecycle-and-reminders': {
+        'task': 'daily_fdr_lifecycle_and_reminders_job',
+        'schedule': crontab(hour=0, minute=0),  # Run daily at midnight
+        'args': (),
+    },
+}
+

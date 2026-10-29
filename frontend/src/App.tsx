@@ -1,5 +1,14 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { InstrumentItem, DocumentItem, DiscrepancyItem, HealthCheckResponse } from './types/provenance';
+import {
+  InstrumentItem,
+  DocumentItem,
+  DiscrepancyItem,
+  HealthCheckResponse,
+  NotificationItem,
+  ReminderRuleItem,
+  EscalationRuleItem,
+  SimulatedDateInfo,
+} from './types/provenance';
 
 const USERS = [
   { username: 'user_ditm', label: 'Delhi Institute (Institution)', password: 'College@DITM2026', role: 'INSTITUTION' },
@@ -25,6 +34,24 @@ export const App: React.FC = () => {
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState<boolean>(false);
   const [selectedInstrument, setSelectedInstrument] = useState<InstrumentItem | null>(null);
   const [modalTab, setModalTab] = useState<'overview' | 'discrepancies' | 'documents' | 'remarks'>('overview');
+
+  // Phase 4: Simulated Date & Monitoring Job State
+  const [simulatedDateInfo, setSimulatedDateInfo] = useState<SimulatedDateInfo | null>(null);
+  const [customSimDateInput, setCustomSimDateInput] = useState<string>('2028-06-01');
+  const [isRunningMonitoringJob, setIsRunningMonitoringJob] = useState<boolean>(false);
+  const [monitoringJobResult, setMonitoringJobResult] = useState<any | null>(null);
+
+  // Phase 4: Notifications State
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [unreadNotifCount, setUnreadNotifCount] = useState<number>(0);
+  const [isNotifModalOpen, setIsNotifModalOpen] = useState<boolean>(false);
+  const [notifTab, setNotifTab] = useState<'all' | 'unread'>('all');
+
+  // Phase 4: Rules & Policy Modal State
+  const [isRulesModalOpen, setIsRulesModalOpen] = useState<boolean>(false);
+  const [rulesTab, setRulesTab] = useState<'reminders' | 'escalations'>('reminders');
+  const [reminderRules, setReminderRules] = useState<ReminderRuleItem[]>([]);
+  const [escalationRules, setEscalationRules] = useState<EscalationRuleItem[]>([]);
 
   // Form State for Submit FDR
   const [refNumber, setRefNumber] = useState<string>('');
@@ -92,6 +119,11 @@ export const App: React.FC = () => {
         setAuthToken(data.access);
         setUserProfile(data.user);
         fetchInstruments(data.access);
+        fetchNotifications(data.access);
+        if (userObj.role === 'ADMIN') {
+          fetchSimulatedDateInfo(data.access);
+          fetchRules(data.access);
+        }
       }
     } catch (err) {
       console.error('Login failed:', err);
@@ -136,7 +168,182 @@ export const App: React.FC = () => {
     }
   };
 
-  // 4. Health Check
+  // 4. Notifications
+  const fetchNotifications = async (token: string) => {
+    try {
+      const res = await fetch('/api/notifications/', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const list = data.results || data;
+        setNotifications(Array.isArray(list) ? list : []);
+      }
+      const countRes = await fetch('/api/notifications/unread-count/', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (countRes.ok) {
+        const cData = await countRes.json();
+        setUnreadNotifCount(cData.unread_count || 0);
+      }
+    } catch (err) {
+      console.error('Notifications fetch error:', err);
+    }
+  };
+
+  const handleMarkNotifRead = async (id: number) => {
+    try {
+      const res = await fetch(`/api/notifications/${id}/mark-read/`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (res.ok) {
+        fetchNotifications(authToken);
+      }
+    } catch (err) {
+      console.error('Mark read error:', err);
+    }
+  };
+
+  const handleMarkAllNotifsRead = async () => {
+    try {
+      const res = await fetch('/api/notifications/mark-all-read/', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (res.ok) {
+        fetchNotifications(authToken);
+      }
+    } catch (err) {
+      console.error('Mark all read error:', err);
+    }
+  };
+
+  // 5. Phase 4: Simulated Date & Time-Travel Controls
+  const fetchSimulatedDateInfo = async (token: string) => {
+    try {
+      const res = await fetch('/api/admin/simulated-date/', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSimulatedDateInfo(data);
+        if (data.simulated_date) {
+          setCustomSimDateInput(data.simulated_date);
+        }
+      }
+    } catch (err) {
+      console.error('Simulated date info error:', err);
+    }
+  };
+
+  const handleSetSimulatedDate = async (targetDateStr: string | null) => {
+    try {
+      const res = await fetch('/api/admin/simulated-date/', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ simulated_date: targetDateStr }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSimulatedDateInfo(data);
+      } else {
+        const err = await res.json();
+        alert(`Failed to set simulated date: ${JSON.stringify(err)}`);
+      }
+    } catch (err) {
+      console.error('Set simulated date error:', err);
+    }
+  };
+
+  const handleRunMonitoringJob = async () => {
+    setIsRunningMonitoringJob(true);
+    setMonitoringJobResult(null);
+    try {
+      const res = await fetch('/api/admin/run-monitoring-job/', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ effective_date: simulatedDateInfo?.effective_date }),
+      });
+      if (res.ok) {
+        const result = await res.json();
+        setMonitoringJobResult(result);
+        fetchInstruments(authToken);
+        fetchNotifications(authToken);
+      } else {
+        const err = await res.json();
+        alert(`Monitoring job failed: ${JSON.stringify(err)}`);
+      }
+    } catch (err) {
+      console.error('Monitoring job trigger error:', err);
+    } finally {
+      setIsRunningMonitoringJob(false);
+    }
+  };
+
+  // 6. Phase 4: Rules Management
+  const fetchRules = async (token: string) => {
+    try {
+      const [remRes, escRes] = await Promise.all([
+        fetch('/api/reminder-rules/', { headers: { Authorization: `Bearer ${token}` } }),
+        fetch('/api/escalation-rules/', { headers: { Authorization: `Bearer ${token}` } }),
+      ]);
+      if (remRes.ok) {
+        const remData = await remRes.json();
+        setReminderRules(Array.isArray(remData.results || remData) ? remData.results || remData : []);
+      }
+      if (escRes.ok) {
+        const escData = await escRes.json();
+        setEscalationRules(Array.isArray(escData.results || escData) ? escData.results || escData : []);
+      }
+    } catch (err) {
+      console.error('Rules fetch error:', err);
+    }
+  };
+
+  const handleToggleReminderRule = async (rule: ReminderRuleItem) => {
+    try {
+      const res = await fetch(`/api/reminder-rules/${rule.id}/`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ is_active: !rule.is_active }),
+      });
+      if (res.ok) {
+        fetchRules(authToken);
+      }
+    } catch (err) {
+      console.error('Toggle reminder error:', err);
+    }
+  };
+
+  const handleToggleEscalationRule = async (rule: EscalationRuleItem) => {
+    try {
+      const res = await fetch(`/api/escalation-rules/${rule.id}/`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ is_active: !rule.is_active }),
+      });
+      if (res.ok) {
+        fetchRules(authToken);
+      }
+    } catch (err) {
+      console.error('Toggle escalation error:', err);
+    }
+  };
+
+  // 7. Health Check
   const fetchHealth = async () => {
     try {
       const res = await fetch('/api/health/');
@@ -218,7 +425,6 @@ export const App: React.FC = () => {
         const data = await res.json();
         setOcrExtractedData(data.extracted);
         setSelectedFile(file);
-        // Also compute hash preview
         const buffer = await file.arrayBuffer();
         const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
         const hashArray = Array.from(new Uint8Array(hashBuffer));
@@ -526,14 +732,24 @@ export const App: React.FC = () => {
     return matchesSearch && matchesStatus;
   });
 
+  // Filter notifications
+  const filteredNotifications = notifications.filter(n => {
+    if (notifTab === 'unread') return !n.is_read;
+    return true;
+  });
+
   // Calculate statistics
   const totalValue = instruments.reduce((sum, item) => sum + parseFloat(item.amount || '0'), 0);
   const verifiedCount = instruments.filter(i => i.status === 'Verified' || i.status === 'Active').length;
+  const expiringCount = instruments.filter(i => i.status === 'Expiring').length;
+  const maturedCount = instruments.filter(i => i.status === 'Matured').length;
   const discrepancyCount = instruments.filter(i => i.status === 'Discrepancy').length;
   const averageTrustScore =
     instruments.length > 0
       ? Math.round(instruments.reduce((sum, item) => sum + (item.trust_score || 0), 0) / instruments.length)
       : 100;
+
+  const effectiveDisplayDate = simulatedDateInfo?.effective_date || new Date().toISOString().split('T')[0];
 
   return (
     <div className="portal-container">
@@ -543,7 +759,7 @@ export const App: React.FC = () => {
           <div className="gov-emblem">AICTE</div>
           <div>
             <h1 className="portal-title">AICTE Security Deposit & FDR Management Portal</h1>
-            <p className="portal-subtitle">Regulation Bureau • Discrepancy Engine & Bank Verification Vault</p>
+            <p className="portal-subtitle">Regulation Bureau • Autonomous Maturity Engine & Escalation System</p>
           </div>
         </div>
 
@@ -563,6 +779,28 @@ export const App: React.FC = () => {
             </select>
           </div>
 
+          {/* Phase 4 Notification Center Bell */}
+          <button
+            className="notif-bell-btn"
+            title="Alerts & Compliance Notifications"
+            onClick={() => setIsNotifModalOpen(true)}
+          >
+            <span>🔔</span>
+            <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>Alerts</span>
+            {unreadNotifCount > 0 && <span className="notif-badge-count">{unreadNotifCount}</span>}
+          </button>
+
+          {/* Phase 4 Admin Policy Rules Button */}
+          {USERS[currentUserIdx].role === 'ADMIN' && (
+            <button
+              className="btn-secondary"
+              style={{ fontSize: '0.8rem', padding: '0.45rem 0.8rem' }}
+              onClick={() => setIsRulesModalOpen(true)}
+            >
+              ⚙️ Policy Rules
+            </button>
+          )}
+
           {health?.status === 'healthy' ? (
             <div className="system-status-pill">
               <span className="status-dot"></span> Core API Operational
@@ -576,7 +814,7 @@ export const App: React.FC = () => {
       </header>
 
       {/* User Context Banner */}
-      <div style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ marginBottom: '1.25rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Logged in as: </span>
           <strong style={{ color: '#fff' }}>{userProfile?.username || USERS[currentUserIdx].username}</strong>
@@ -597,6 +835,74 @@ export const App: React.FC = () => {
         )}
       </div>
 
+      {/* PHASE 4: TIME-TRAVEL DEMO CONTROLLER BAR (ADMIN / TESTING) */}
+      {(USERS[currentUserIdx].role === 'ADMIN' || USERS[currentUserIdx].role === 'SCRUTINY_OFFICER') && (
+        <div className="time-travel-bar">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#fff' }}>
+              ⏱️ Simulated System Date Engine:
+            </span>
+            <span
+              className={simulatedDateInfo?.is_active ? 'sim-active-badge' : 'sim-real-badge'}
+            >
+              {simulatedDateInfo?.is_active ? `SIMULATED: ${simulatedDateInfo.effective_date}` : `REAL TODAY: ${effectiveDisplayDate}`}
+            </span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              (Guarded: Non-Production Mode)
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <input
+              type="date"
+              className="form-input"
+              style={{ fontSize: '0.78rem', padding: '0.35rem 0.6rem', background: 'rgba(0,0,0,0.5)' }}
+              value={customSimDateInput}
+              onChange={e => setCustomSimDateInput(e.target.value)}
+            />
+            <button
+              className="btn-secondary"
+              style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem' }}
+              onClick={() => handleSetSimulatedDate(customSimDateInput)}
+            >
+              Set Date
+            </button>
+            {simulatedDateInfo?.is_active && (
+              <button
+                className="btn-secondary"
+                style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem', color: 'var(--accent-saffron)' }}
+                onClick={() => handleSetSimulatedDate(null)}
+              >
+                Reset to Today
+              </button>
+            )}
+            <button
+              className="btn-primary"
+              style={{ fontSize: '0.75rem', padding: '0.35rem 0.8rem' }}
+              disabled={isRunningMonitoringJob}
+              onClick={handleRunMonitoringJob}
+            >
+              {isRunningMonitoringJob ? 'Evaluating Celery Task...' : '⚡ Run Daily Monitoring Job'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Monitoring Job Result Toast Banner */}
+      {monitoringJobResult && (
+        <div className="alert-box success" style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <strong>✓ Daily Lifecycle Monitoring Job Executed Successfully for {monitoringJobResult.effective_date}</strong>
+            <div style={{ fontSize: '0.78rem', marginTop: '0.25rem', color: '#cbd5e1' }}>
+              Evaluated {monitoringJobResult.instruments_evaluated} records • Transitions: {monitoringJobResult.status_transitions?.to_expiring} Expiring, {monitoringJobResult.status_transitions?.to_matured} Matured, {monitoringJobResult.status_transitions?.to_active} Active • Reminders: {monitoringJobResult.reminders_dispatched} Sent • Escalations: {monitoringJobResult.escalations_triggered} Triggered • Overdue: {monitoringJobResult.overdue_flagged}
+            </div>
+          </div>
+          <button className="modal-close" style={{ color: '#fff', fontSize: '1.2rem' }} onClick={() => setMonitoringJobResult(null)}>
+            &times;
+          </button>
+        </div>
+      )}
+
       {/* Stats Summary Cards */}
       <section className="stats-grid">
         <div className="stat-card">
@@ -609,21 +915,21 @@ export const App: React.FC = () => {
           <div className="stat-value" style={{ color: 'var(--accent-emerald)' }}>
             {verifiedCount}
           </div>
-          <div className="stat-meta">Bank CBS Confirmed</div>
+          <div className="stat-meta">Active & Verified</div>
         </div>
         <div className="stat-card">
-          <div className="stat-label">Discrepancy Alerts</div>
-          <div className="stat-value" style={{ color: discrepancyCount > 0 ? 'var(--accent-rose)' : '#fff' }}>
-            {discrepancyCount}
+          <div className="stat-label">Expiring / Matured</div>
+          <div className="stat-value" style={{ color: expiringCount > 0 || maturedCount > 0 ? 'var(--accent-saffron)' : '#fff' }}>
+            {expiringCount + maturedCount}
           </div>
-          <div className="stat-meta">Requires Attention</div>
+          <div className="stat-meta">{expiringCount} Expiring • {maturedCount} Matured</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Average Trust Score</div>
           <div className="stat-value" style={{ color: averageTrustScore >= 80 ? 'var(--accent-emerald)' : 'var(--accent-saffron)' }}>
             {averageTrustScore}/100
           </div>
-          <div className="stat-meta">Multi-vector Integrity</div>
+          <div className="stat-meta">Discrepancy Alerts: {discrepancyCount}</div>
         </div>
       </section>
 
@@ -654,6 +960,8 @@ export const App: React.FC = () => {
             <option value="Under Scrutiny">Under Scrutiny</option>
             <option value="Verified">Verified</option>
             <option value="Active">Active</option>
+            <option value="Expiring">Expiring</option>
+            <option value="Matured">Matured</option>
             <option value="Discrepancy">Discrepancy</option>
             <option value="Release Requested">Release Requested</option>
             <option value="Released">Released</option>
@@ -716,7 +1024,19 @@ export const App: React.FC = () => {
                       ₹{parseFloat(item.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </strong>
                   </td>
-                  <td>{item.maturity_date}</td>
+                  <td>
+                    <div>{item.maturity_date}</div>
+                    {item.status === 'Expiring' && (
+                      <div style={{ fontSize: '0.7rem', color: 'var(--accent-saffron)', fontWeight: 600 }}>
+                        Expiring Soon
+                      </div>
+                    )}
+                    {item.status === 'Matured' && (
+                      <div style={{ fontSize: '0.7rem', color: 'var(--accent-rose)', fontWeight: 700 }}>
+                        Matured / Action Needed
+                      </div>
+                    )}
+                  </td>
                   <td>
                     <span
                       className={`trust-pill ${
@@ -761,6 +1081,220 @@ export const App: React.FC = () => {
           </table>
         )}
       </div>
+
+      {/* PHASE 4: NOTIFICATIONS MODAL / DRAWER */}
+      {isNotifModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsNotifModalOpen(false)}>
+          <div className="modal-content" style={{ maxWidth: '680px' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <h3 className="modal-title">🔔 Regulatory Alerts & Notifications</h3>
+                {unreadNotifCount > 0 && <span className="notif-badge-count">{unreadNotifCount} New</span>}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                {unreadNotifCount > 0 && (
+                  <button
+                    className="btn-secondary"
+                    style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }}
+                    onClick={handleMarkAllNotifsRead}
+                  >
+                    Mark All Read
+                  </button>
+                )}
+                <button className="modal-close" onClick={() => setIsNotifModalOpen(false)}>&times;</button>
+              </div>
+            </div>
+
+            <div className="tab-nav" style={{ marginBottom: '1rem' }}>
+              <button
+                className={`tab-btn ${notifTab === 'all' ? 'active' : ''}`}
+                onClick={() => setNotifTab('all')}
+              >
+                All Alerts ({notifications.length})
+              </button>
+              <button
+                className={`tab-btn ${notifTab === 'unread' ? 'active' : ''}`}
+                onClick={() => setNotifTab('unread')}
+              >
+                Unread ({unreadNotifCount})
+              </button>
+            </div>
+
+            {filteredNotifications.length === 0 ? (
+              <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                No notifications to display in this view.
+              </div>
+            ) : (
+              <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+                {filteredNotifications.map(notif => (
+                  <div
+                    key={notif.id}
+                    className={`notif-card ${!notif.is_read ? 'is-unread' : ''}`}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.4rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <span className={`notif-channel-pill notif-channel-${notif.channel.toLowerCase()}`}>
+                          {notif.channel}
+                        </span>
+                        <span className={`notif-type-pill notif-type-${notif.notification_type.toLowerCase()}`}>
+                          {notif.notification_type}
+                        </span>
+                        {notif.offset_days && (
+                          <span className="badge-hash">{notif.offset_days} Days Out</span>
+                        )}
+                        <strong style={{ color: '#fff', fontSize: '0.85rem' }}>{notif.title}</strong>
+                      </div>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                        {new Date(notif.sent_at).toLocaleString()}
+                      </span>
+                    </div>
+
+                    <p style={{ fontSize: '0.8rem', color: '#cbd5e1', marginTop: '0.4rem', lineHeight: 1.4 }}>
+                      {notif.message}
+                    </p>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                        Target: {notif.recipient_role || 'User'} {notif.instrument_reference ? `• ${notif.instrument_reference}` : ''}
+                      </span>
+                      {!notif.is_read ? (
+                        <button
+                          className="btn-secondary"
+                          style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }}
+                          onClick={() => handleMarkNotifRead(notif.id)}
+                        >
+                          Mark as Read
+                        </button>
+                      ) : (
+                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>✓ Read</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* PHASE 4: ADMIN RULES & POLICY MODAL */}
+      {isRulesModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsRulesModalOpen(false)}>
+          <div className="modal-content" style={{ maxWidth: '850px' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">⚙️ AICTE Reminder & Escalation SLA Policy Settings</h3>
+              <button className="modal-close" onClick={() => setIsRulesModalOpen(false)}>&times;</button>
+            </div>
+
+            <div className="tab-nav">
+              <button
+                className={`tab-btn ${rulesTab === 'reminders' ? 'active' : ''}`}
+                onClick={() => setRulesTab('reminders')}
+              >
+                Maturity Reminder Rules ({reminderRules.length})
+              </button>
+              <button
+                className={`tab-btn ${rulesTab === 'escalations' ? 'active' : ''}`}
+                onClick={() => setRulesTab('escalations')}
+              >
+                Regulatory Escalation Chains ({escalationRules.length})
+              </button>
+            </div>
+
+            {rulesTab === 'reminders' && (
+              <div>
+                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+                  Configured offsets (in days prior to scheduled FDR maturity) that trigger automated alerts across In-App, Email, and SMS channels.
+                </p>
+                <table className="portal-table">
+                  <thead>
+                    <tr>
+                      <th>Rule Name</th>
+                      <th>Offset Days</th>
+                      <th>Channels</th>
+                      <th>Target Role</th>
+                      <th>Status</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reminderRules.map(r => (
+                      <tr key={r.id}>
+                        <td><strong>{r.name}</strong></td>
+                        <td><span className="badge-hash">{r.offset_days} Days Before</span></td>
+                        <td><span className="notif-channel-pill notif-channel-inapp">{r.channel}</span></td>
+                        <td>{r.target_role}</td>
+                        <td>
+                          <span className={`badge ${r.is_active ? 'badge-confirmed' : 'badge-discrepancy'}`}>
+                            {r.is_active ? 'Active' : 'Disabled'}
+                          </span>
+                        </td>
+                        <td>
+                          <button
+                            className="btn-secondary"
+                            style={{ fontSize: '0.72rem', padding: '0.25rem 0.5rem' }}
+                            onClick={() => handleToggleReminderRule(r)}
+                          >
+                            {r.is_active ? 'Deactivate' : 'Activate'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {rulesTab === 'escalations' && (
+              <div>
+                <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+                  Multi-tier escalation ladders that automatically elevate unresolved discrepancies or overdue matured FDRs up the executive hierarchy.
+                </p>
+                <table className="portal-table">
+                  <thead>
+                    <tr>
+                      <th>Escalation Rule</th>
+                      <th>Condition</th>
+                      <th>SLA Wait Period</th>
+                      <th>Escalation Ladder</th>
+                      <th>Status</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {escalationRules.map(e => (
+                      <tr key={e.id}>
+                        <td><strong>{e.name}</strong></td>
+                        <td><span className="badge-hash">{e.trigger_condition}</span></td>
+                        <td>{e.wait_period_days} Days Past SLA</td>
+                        <td>
+                          <span style={{ color: 'var(--accent-saffron)', fontWeight: 600 }}>{e.from_level}</span>
+                          {' ➔ '}
+                          <span style={{ color: 'var(--accent-rose)', fontWeight: 700 }}>{e.to_level}</span>
+                        </td>
+                        <td>
+                          <span className={`badge ${e.is_active ? 'badge-confirmed' : 'badge-discrepancy'}`}>
+                            {e.is_active ? 'Active' : 'Disabled'}
+                          </span>
+                        </td>
+                        <td>
+                          <button
+                            className="btn-secondary"
+                            style={{ fontSize: '0.72rem', padding: '0.25rem 0.5rem' }}
+                            onClick={() => handleToggleEscalationRule(e)}
+                          >
+                            {e.is_active ? 'Deactivate' : 'Activate'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* SUBMIT FDR MODAL WITH PHASE 3 OCR PRE-FILL */}
       {isSubmitModalOpen && (

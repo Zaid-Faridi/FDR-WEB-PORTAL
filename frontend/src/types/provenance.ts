@@ -120,3 +120,70 @@ export interface HealthCheckResponse {
     error?: string;
   };
 }
+
+export interface NotificationItem {
+  id: number;
+  instrument: number | null;
+  instrument_reference?: string;
+  institution_name?: string;
+  recipient: number | null;
+  recipient_role: string;
+  recipient_email?: string;
+  recipient_phone?: string;
+  channel: 'IN_APP' | 'EMAIL' | 'SMS' | 'ALL';
+  notification_type: 'REMINDER' | 'ESCALATION' | 'STATUS_CHANGE' | 'OVERDUE';
+  title: string;
+  message: string;
+  offset_days?: number | null;
+  escalation_level?: string;
+  is_read: boolean;
+  sent_at: string;
+  read_at?: string | null;
+}
+
+export interface ReminderRuleItem {
+  id: number;
+  name: string;
+  offset_days: number;
+  channel: string;
+  target_role: string;
+  template_subject: string;
+  template_body: string;
+  is_active: boolean;
+}
+
+export interface EscalationRuleItem {
+  id: number;
+  name: string;
+  trigger_condition: string;
+  wait_period_days: number;
+  from_level: string;
+  to_level: string;
+  channel: string;
+  template_subject: string;
+  template_body: string;
+  is_active: boolean;
+}
+
+export interface EscalationRecordItem {
+  id: number;
+  instrument: number;
+  instrument_reference?: string;
+  institution_name?: string;
+  trigger_condition: string;
+  from_level: string;
+  to_level: string;
+  reason: string;
+  triggered_at: string;
+  is_resolved: boolean;
+}
+
+export interface SimulatedDateInfo {
+  is_simulation_allowed: boolean;
+  is_active: boolean;
+  simulated_date: string | null;
+  effective_date: string;
+  real_today: string;
+  environment: string;
+}
+
