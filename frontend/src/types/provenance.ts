@@ -235,3 +235,100 @@ export interface SimulatedDateInfo {
   environment: string;
 }
 
+export interface RiskWorklistItem {
+  id: number;
+  reference_number: string;
+  institution_id: number;
+  institution_name: string;
+  institution_aicte_id: string;
+  issuing_bank: string;
+  amount: string;
+  status: InstrumentStatus;
+  issue_date: string | null;
+  maturity_date: string | null;
+  days_to_maturity: number | null;
+  risk_score: number;
+  risk_tier: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+  risk_factors: string[];
+  open_discrepancies_count: number;
+  compliance_hold: boolean;
+}
+
+export interface ExpiryMonthForecast {
+  month_label: string;
+  month_key: string;
+  count: number;
+  total_amount: number;
+}
+
+export interface OfficerDashboardData {
+  effective_date: string;
+  counts: {
+    total_instruments: number;
+    active: number;
+    expiring_30: number;
+    expiring_60: number;
+    expiring_90: number;
+    expiring_total: number;
+    matured: number;
+    renewed: number;
+    released: number;
+    replaced: number;
+    pending_verification: number;
+    discrepancies: number;
+    total_amount: number;
+    active_amount: number;
+  };
+  expiry_buckets: {
+    '0_30_days': number;
+    '31_60_days': number;
+    '61_90_days': number;
+    total_expiring: number;
+  };
+  status_distribution: Array<{ status: string; label: string; count: number }>;
+  bank_distribution: Array<{ bank: string; count: number; total_amount: number }>;
+  expiry_timeline: ExpiryMonthForecast[];
+  risk_worklist: RiskWorklistItem[];
+}
+
+export interface InstitutionDeadlineItem {
+  id: number;
+  reference_number: string;
+  issuing_bank: string;
+  amount: string;
+  status: InstrumentStatus;
+  issue_date: string | null;
+  maturity_date: string | null;
+  days_left: number;
+  urgency: 'OVERDUE' | 'CRITICAL' | 'HIGH' | 'MEDIUM';
+  action_required: string;
+  has_discrepancies: boolean;
+}
+
+export interface InstitutionDashboardData {
+  effective_date: string;
+  institution_id: number;
+  summary: {
+    total_instruments: number;
+    total_amount: number;
+    active_count: number;
+    expiring_count: number;
+    matured_count: number;
+    under_scrutiny_count: number;
+    discrepancy_count: number;
+    released_count: number;
+    replaced_count: number;
+  };
+  upcoming_deadlines: InstitutionDeadlineItem[];
+}
+
+export interface SavedFilterItem {
+  id: number;
+  name: string;
+  filter_params: Record<string, any>;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+

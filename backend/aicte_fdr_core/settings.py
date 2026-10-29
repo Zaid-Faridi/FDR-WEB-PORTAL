@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     'apps.core.apps.CoreConfig',
     'apps.bank_adapters.apps.BankAdaptersConfig',
     'apps.notifications.apps.NotificationsConfig',
+    'apps.reports.apps.ReportsConfig',
 ]
 
 MIDDLEWARE = [
@@ -205,6 +206,11 @@ CELERY_BEAT_SCHEDULE = {
     'daily-fdr-lifecycle-and-reminders': {
         'task': 'daily_fdr_lifecycle_and_reminders_job',
         'schedule': crontab(hour=0, minute=0),  # Run daily at midnight
+        'args': (),
+    },
+    'weekly-officer-summary-email': {
+        'task': 'weekly_officer_summary_email_job',
+        'schedule': crontab(day_of_week=1, hour=9, minute=0),  # Mondays at 09:00 AM
         'args': (),
     },
 }

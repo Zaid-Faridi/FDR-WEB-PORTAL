@@ -8,6 +8,9 @@ import {
   ReminderRuleItem,
   EscalationRuleItem,
   SimulatedDateInfo,
+  OfficerDashboardData,
+  InstitutionDashboardData,
+  SavedFilterItem,
 } from './types/provenance';
 
 const USERS = [
@@ -122,6 +125,31 @@ export const App: React.FC = () => {
   const [releaseActionSuccess, setReleaseActionSuccess] = useState<string>('');
   const [releaseActionError, setReleaseActionError] = useState<string>('');
 
+  // Phase 6: Dashboards & Analytics State
+  const [officerDashboard, setOfficerDashboard] = useState<OfficerDashboardData | null>(null);
+  const [institutionDashboard, setInstitutionDashboard] = useState<InstitutionDashboardData | null>(null);
+  const [loadingDashboard, setLoadingDashboard] = useState<boolean>(false);
+  const [officerTab, setOfficerTab] = useState<'kpi' | 'timeline' | 'risk'>('kpi');
+
+  // Phase 6: Advanced Filters & Saved Filters
+  const [filterBank, setFilterBank] = useState<string>('');
+  const [filterMinAmount, setFilterMinAmount] = useState<string>('');
+  const [filterMaxAmount, setFilterMaxAmount] = useState<string>('');
+  const [filterMaturityFrom, setFilterMaturityFrom] = useState<string>('');
+  const [filterMaturityTo, setFilterMaturityTo] = useState<string>('');
+  const [filterDiscrepancyType, setFilterDiscrepancyType] = useState<string>('');
+  const [savedFilters, setSavedFilters] = useState<SavedFilterItem[]>([]);
+  const [activeSavedFilterId, setActiveSavedFilterId] = useState<number | null>(null);
+  const [isSaveFilterModalOpen, setIsSaveFilterModalOpen] = useState<boolean>(false);
+  const [saveFilterNameInput, setSaveFilterNameInput] = useState<string>('');
+  const [isSavingFilter, setIsSavingFilter] = useState<boolean>(false);
+
+  // Phase 6: Reports & Exports Modal
+  const [isReportsModalOpen, setIsReportsModalOpen] = useState<boolean>(false);
+  const [downloadingReportKey, setDownloadingReportKey] = useState<string | null>(null);
+  const [isSendingWeeklySummary, setIsSendingWeeklySummary] = useState<boolean>(false);
+  const [weeklySummaryMsg, setWeeklySummaryMsg] = useState<string | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const ocrFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -140,6 +168,14 @@ export const App: React.FC = () => {
         setUserProfile(data.user);
         fetchInstruments(data.access);
         fetchNotifications(data.access);
+        fetchSavedFilters(data.access);
+        if (userObj.role === 'INSTITUTION') {
+          fetchInstitutionDashboard(data.access);
+          setOfficerDashboard(null);
+        } else {
+          fetchOfficerDashboard(data.access);
+          setInstitutionDashboard(null);
+        }
         if (userObj.role === 'ADMIN') {
           fetchSimulatedDateInfo(data.access);
           fetchRules(data.access);
@@ -270,6 +306,12 @@ export const App: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         setSimulatedDateInfo(data);
+        fetchInstruments(authToken);
+        if (USERS[currentUserIdx].role === 'INSTITUTION') {
+          fetchInstitutionDashboard(authToken);
+        } else {
+          fetchOfficerDashboard(authToken);
+        }
       } else {
         const err = await res.json();
         alert(`Failed to set simulated date: ${JSON.stringify(err)}`);
@@ -296,6 +338,11 @@ export const App: React.FC = () => {
         setMonitoringJobResult(result);
         fetchInstruments(authToken);
         fetchNotifications(authToken);
+        if (USERS[currentUserIdx].role === 'INSTITUTION') {
+          fetchInstitutionDashboard(authToken);
+        } else {
+          fetchOfficerDashboard(authToken);
+        }
       } else {
         const err = await res.json();
         alert(`Monitoring job failed: ${JSON.stringify(err)}`);
@@ -363,7 +410,198 @@ export const App: React.FC = () => {
     }
   };
 
-  // 7. Health Check
+  // 7. Phase 6: Dashboards & Analytics
+  const fetchOfficerDashboard = async (token: string) => {
+    setLoadingDashboard(true);
+    try {
+      const res = await fetch('/api/reports/officer-dashboard/', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data: OfficerDashboardData = await res.json();
+        setOfficerDashboard(data);
+      }
+    } catch (err) {
+      console.error('Officer dashboard fetch error:', err);
+    } finally {
+      setLoadingDashboard(false);
+    }
+  };
+
+  const fetchInstitutionDashboard = async (token: string) => {
+    setLoadingDashboard(true);
+    try {
+      const res = await fetch('/api/reports/institution-dashboard/', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data: InstitutionDashboardData = await res.json();
+        setInstitutionDashboard(data);
+      }
+    } catch (err) {
+      console.error('Institution dashboard fetch error:', err);
+    } finally {
+      setLoadingDashboard(false);
+    }
+  };
+
+  // 8. Phase 6: Saved Filters
+  const fetchSavedFilters = async (token: string) => {
+    try {
+      const res = await fetch('/api/saved-filters/', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const list = Array.isArray(data) ? data : data.results || [];
+        setSavedFilters(list);
+      }
+    } catch (err) {
+      console.error('Saved filters fetch error:', err);
+    }
+  };
+
+  const handleSaveFilter = async () => {
+    if (!saveFilterNameInput.trim()) return;
+    setIsSavingFilter(true);
+    try {
+      const payload = {
+        name: saveFilterNameInput.trim(),
+        filter_params: {
+          search: searchQuery,
+          status: statusFilter,
+          bank: filterBank,
+          min_amount: filterMinAmount,
+          max_amount: filterMaxAmount,
+          maturity_from: filterMaturityFrom,
+          maturity_to: filterMaturityTo,
+          discrepancy_type: filterDiscrepancyType,
+        },
+        is_default: false,
+      };
+      const res = await fetch('/api/saved-filters/', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        setSaveFilterNameInput('');
+        setIsSaveFilterModalOpen(false);
+        fetchSavedFilters(authToken);
+      } else {
+        const err = await res.json();
+        alert(`Failed to save filter: ${JSON.stringify(err)}`);
+      }
+    } catch (err) {
+      console.error('Save filter error:', err);
+    } finally {
+      setIsSavingFilter(false);
+    }
+  };
+
+  const handleApplySavedFilter = (saved: SavedFilterItem) => {
+    setActiveSavedFilterId(saved.id);
+    const p = saved.filter_params || {};
+    setSearchQuery(p.search || '');
+    setStatusFilter(p.status || 'ALL');
+    setFilterBank(p.bank || '');
+    setFilterMinAmount(p.min_amount || '');
+    setFilterMaxAmount(p.max_amount || '');
+    setFilterMaturityFrom(p.maturity_from || '');
+    setFilterMaturityTo(p.maturity_to || '');
+    setFilterDiscrepancyType(p.discrepancy_type || '');
+  };
+
+  const handleResetFilters = () => {
+    setActiveSavedFilterId(null);
+    setSearchQuery('');
+    setStatusFilter('ALL');
+    setFilterBank('');
+    setFilterMinAmount('');
+    setFilterMaxAmount('');
+    setFilterMaturityFrom('');
+    setFilterMaturityTo('');
+    setFilterDiscrepancyType('');
+  };
+
+  const handleDeleteSavedFilter = async (id: number) => {
+    try {
+      const res = await fetch(`/api/saved-filters/${id}/`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (res.ok) {
+        if (activeSavedFilterId === id) setActiveSavedFilterId(null);
+        fetchSavedFilters(authToken);
+      }
+    } catch (err) {
+      console.error('Delete saved filter error:', err);
+    }
+  };
+
+  // 9. Phase 6: Reports & Exports
+  const handleDownloadReport = async (reportType: string, format: 'csv' | 'pdf') => {
+    const downloadKey = `${reportType}-${format}`;
+    setDownloadingReportKey(downloadKey);
+    try {
+      const endpoint = format === 'csv'
+        ? `/api/reports/download-csv/?report_type=${encodeURIComponent(reportType)}`
+        : `/api/reports/download-pdf/?report_type=${encodeURIComponent(reportType)}`;
+      const res = await fetch(endpoint, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (res.ok) {
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `aicte_report_${reportType}_${new Date().toISOString().split('T')[0]}.${format}`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Report download failed: ${err.error || 'Server error'}`);
+      }
+    } catch (err) {
+      console.error('Download error:', err);
+      alert('Failed to download report.');
+    } finally {
+      setDownloadingReportKey(null);
+    }
+  };
+
+  const handleSendWeeklySummaryNow = async () => {
+    setIsSendingWeeklySummary(true);
+    setWeeklySummaryMsg(null);
+    try {
+      const res = await fetch('/api/reports/send-weekly-summary/', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setWeeklySummaryMsg(data.message || 'Weekly compliance summary dispatched successfully to regulatory officials.');
+      } else {
+        alert(`Dispatch failed: ${data.error || 'Unknown error'}`);
+      }
+    } catch (err) {
+      console.error('Send weekly summary error:', err);
+      alert('Failed to trigger weekly summary email.');
+    } finally {
+      setIsSendingWeeklySummary(false);
+    }
+  };
+
+  // 10. Health Check
   const fetchHealth = async () => {
     try {
       const res = await fetch('/api/health/');
@@ -933,14 +1171,52 @@ export const App: React.FC = () => {
     }
   };
 
-  // Filter instruments
+  // Filter instruments with Phase 6 multi-parameter filter capabilities
   const filteredInstruments = instruments.filter(item => {
+    const q = searchQuery.toLowerCase().trim();
     const matchesSearch =
-      item.reference_number.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.issuing_bank.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.institution_name.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = statusFilter === 'ALL' || item.status === statusFilter;
-    return matchesSearch && matchesStatus;
+      !q ||
+      item.reference_number.toLowerCase().includes(q) ||
+      item.issuing_bank.toLowerCase().includes(q) ||
+      item.institution_name.toLowerCase().includes(q) ||
+      (item.issuing_branch && item.issuing_branch.toLowerCase().includes(q)) ||
+      (item.branch_ifsc && item.branch_ifsc.toLowerCase().includes(q));
+
+    const matchesStatus =
+      statusFilter === 'ALL' ||
+      item.status.toLowerCase() === statusFilter.toLowerCase();
+
+    const matchesBank =
+      !filterBank ||
+      item.issuing_bank.toLowerCase().includes(filterBank.toLowerCase());
+
+    const numAmt = parseFloat(item.amount || '0');
+    const matchesMinAmount =
+      !filterMinAmount || numAmt >= parseFloat(filterMinAmount);
+    const matchesMaxAmount =
+      !filterMaxAmount || numAmt <= parseFloat(filterMaxAmount);
+
+    const matchesMaturityFrom =
+      !filterMaturityFrom || (item.maturity_date && item.maturity_date >= filterMaturityFrom);
+    const matchesMaturityTo =
+      !filterMaturityTo || (item.maturity_date && item.maturity_date <= filterMaturityTo);
+
+    const matchesDiscrepancyType =
+      !filterDiscrepancyType ||
+      (filterDiscrepancyType === 'HAS_ANY' && item.discrepancies && item.discrepancies.length > 0) ||
+      (filterDiscrepancyType === 'NONE' && (!item.discrepancies || item.discrepancies.length === 0)) ||
+      (item.discrepancies && item.discrepancies.some(d => d.rule_code === filterDiscrepancyType || d.severity === filterDiscrepancyType));
+
+    return (
+      matchesSearch &&
+      matchesStatus &&
+      matchesBank &&
+      matchesMinAmount &&
+      matchesMaxAmount &&
+      matchesMaturityFrom &&
+      matchesMaturityTo &&
+      matchesDiscrepancyType
+    );
   });
 
   // Filter notifications
@@ -955,10 +1231,6 @@ export const App: React.FC = () => {
   const expiringCount = instruments.filter(i => i.status === 'Expiring').length;
   const maturedCount = instruments.filter(i => i.status === 'Matured').length;
   const discrepancyCount = instruments.filter(i => i.status === 'Discrepancy').length;
-  const averageTrustScore =
-    instruments.length > 0
-      ? Math.round(instruments.reduce((sum, item) => sum + (item.trust_score || 0), 0) / instruments.length)
-      : 100;
 
   const effectiveDisplayDate = simulatedDateInfo?.effective_date || new Date().toISOString().split('T')[0];
 
@@ -1009,6 +1281,20 @@ export const App: React.FC = () => {
               onClick={() => setIsRulesModalOpen(true)}
             >
               ⚙️ Policy Rules
+            </button>
+          )}
+
+          {/* Phase 6 Reports & Analytics Button */}
+          {(USERS[currentUserIdx].role === 'ADMIN' || USERS[currentUserIdx].role === 'SCRUTINY_OFFICER' || USERS[currentUserIdx].role === 'APPROVING_AUTHORITY') && (
+            <button
+              className="btn-secondary"
+              style={{ fontSize: '0.8rem', padding: '0.45rem 0.8rem', background: 'rgba(59, 130, 246, 0.15)', borderColor: 'rgba(59, 130, 246, 0.4)', color: '#93c5fd' }}
+              onClick={() => {
+                setWeeklySummaryMsg(null);
+                setIsReportsModalOpen(true);
+              }}
+            >
+              📊 Compliance Reports
             </button>
           )}
 
@@ -1114,55 +1400,426 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* Stats Summary Cards */}
-      <section className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-label">Total Deposit Value</div>
-          <div className="stat-value">₹{(totalValue / 100000).toFixed(2)} Lakhs</div>
-          <div className="stat-meta">Across {instruments.length} Instruments</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Verified Instruments</div>
-          <div className="stat-value" style={{ color: 'var(--accent-emerald)' }}>
-            {verifiedCount}
+      {/* PHASE 6: ROLE-SPECIFIC COMPLIANCE DASHBOARDS */}
+      {USERS[currentUserIdx].role !== 'INSTITUTION' ? (
+        <div style={{ marginBottom: '2rem' }}>
+          {/* Sub-navigation tabs for Officer Dashboard */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+            <div className="tab-nav" style={{ margin: 0 }}>
+              <button
+                className={`tab-btn ${officerTab === 'kpi' ? 'active' : ''}`}
+                onClick={() => setOfficerTab('kpi')}
+              >
+                📊 KPI Metrics & Buckets
+              </button>
+              <button
+                className={`tab-btn ${officerTab === 'timeline' ? 'active' : ''}`}
+                onClick={() => setOfficerTab('timeline')}
+              >
+                📅 12-Month Expiry Forecast
+              </button>
+              <button
+                className={`tab-btn ${officerTab === 'risk' ? 'active' : ''}`}
+                onClick={() => setOfficerTab('risk')}
+              >
+                ⚠️ Risk-Ranked Worklist ({officerDashboard?.risk_worklist?.length || 0})
+              </button>
+            </div>
+            <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              {loadingDashboard && <span style={{ color: 'var(--accent-saffron)', fontSize: '0.72rem' }}>Refreshing metrics...</span>}
+              <span>Evaluation Date: <strong style={{ color: '#fff' }}>{officerDashboard?.effective_date || effectiveDisplayDate}</strong></span>
+            </div>
           </div>
-          <div className="stat-meta">Active & Verified</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Expiring / Matured</div>
-          <div className="stat-value" style={{ color: expiringCount > 0 || maturedCount > 0 ? 'var(--accent-saffron)' : '#fff' }}>
-            {expiringCount + maturedCount}
-          </div>
-          <div className="stat-meta">{expiringCount} Expiring • {maturedCount} Matured</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Average Trust Score</div>
-          <div className="stat-value" style={{ color: averageTrustScore >= 80 ? 'var(--accent-emerald)' : 'var(--accent-saffron)' }}>
-            {averageTrustScore}/100
-          </div>
-          <div className="stat-meta">Discrepancy Alerts: {discrepancyCount}</div>
-        </div>
-      </section>
 
-      {/* Section Toolbar */}
-      <div className="section-toolbar">
-        <h2 className="section-title">
-          {USERS[currentUserIdx].role === 'INSTITUTION'
-            ? 'Institutional Fixed Deposit Receipts'
-            : 'National Institution Deposit Directory'}
-        </h2>
+          {/* TAB 1: KPI OVERVIEW */}
+          {officerTab === 'kpi' && (
+            <div>
+              <div className="kpi-grid-6">
+                <div className="kpi-card-rich">
+                  <div className="kpi-card-title">Active Deposits</div>
+                  <div className="kpi-card-val" style={{ color: 'var(--accent-emerald)' }}>
+                    {officerDashboard?.counts?.active ?? verifiedCount}
+                  </div>
+                  <div className="kpi-card-meta">
+                    ₹{((officerDashboard?.counts?.active_amount ?? totalValue) / 100000).toFixed(2)} Lakhs Total Active
+                  </div>
+                </div>
 
-        <div className="toolbar-controls">
+                <div className="kpi-card-rich">
+                  <div className="kpi-card-title">Expiring Soon (90d)</div>
+                  <div className="kpi-card-val" style={{ color: 'var(--accent-saffron)' }}>
+                    {officerDashboard?.counts?.expiring_total ?? expiringCount}
+                  </div>
+                  <div className="kpi-card-meta" style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', marginTop: '0.2rem' }}>
+                    <span className="badge" style={{ background: 'rgba(239, 68, 68, 0.2)', color: '#f87171', fontSize: '0.65rem' }}>
+                      0-30d: {officerDashboard?.counts?.expiring_30 ?? 0}
+                    </span>
+                    <span className="badge" style={{ background: 'rgba(245, 158, 11, 0.2)', color: '#fbbf24', fontSize: '0.65rem' }}>
+                      31-60d: {officerDashboard?.counts?.expiring_60 ?? 0}
+                    </span>
+                    <span className="badge" style={{ background: 'rgba(59, 130, 246, 0.2)', color: '#60a5fa', fontSize: '0.65rem' }}>
+                      61-90d: {officerDashboard?.counts?.expiring_90 ?? 0}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="kpi-card-rich">
+                  <div className="kpi-card-title">Matured / Overdue</div>
+                  <div className="kpi-card-val" style={{ color: 'var(--accent-rose)' }}>
+                    {officerDashboard?.counts?.matured ?? maturedCount}
+                  </div>
+                  <div className="kpi-card-meta">Action Required Immediately</div>
+                </div>
+
+                <div className="kpi-card-rich">
+                  <div className="kpi-card-title">Pending Verification</div>
+                  <div className="kpi-card-val" style={{ color: '#38bdf8' }}>
+                    {officerDashboard?.counts?.pending_verification ?? 0}
+                  </div>
+                  <div className="kpi-card-meta">Awaiting Bank CBS Scrutiny</div>
+                </div>
+
+                <div className="kpi-card-rich">
+                  <div className="kpi-card-title">Open Discrepancies</div>
+                  <div className="kpi-card-val" style={{ color: '#fb7185' }}>
+                    {officerDashboard?.counts?.discrepancies ?? discrepancyCount}
+                  </div>
+                  <div className="kpi-card-meta">Audit Discrepancy Flags</div>
+                </div>
+
+                <div className="kpi-card-rich">
+                  <div className="kpi-card-title">National Deposit Corpus</div>
+                  <div className="kpi-card-val" style={{ color: '#f8fafc' }}>
+                    ₹{((officerDashboard?.counts?.total_amount ?? totalValue) / 10000000).toFixed(2)} Cr
+                  </div>
+                  <div className="kpi-card-meta">
+                    Across {officerDashboard?.counts?.total_instruments ?? instruments.length} Instruments
+                  </div>
+                </div>
+              </div>
+
+              {/* Bank Exposure Distribution Bar */}
+              {officerDashboard?.bank_distribution && officerDashboard.bank_distribution.length > 0 && (
+                <div style={{ marginTop: '1rem', background: 'rgba(15, 23, 42, 0.6)', padding: '0.85rem 1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Issuing Bank Exposure:
+                  </span>
+                  <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', flex: 1 }}>
+                    {officerDashboard.bank_distribution.slice(0, 6).map(b => (
+                      <span key={b.bank} style={{ fontSize: '0.72rem', background: 'rgba(255,255,255,0.05)', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border-color)', color: '#cbd5e1' }}>
+                        <strong style={{ color: '#fff' }}>{b.bank}</strong>: {b.count} FDRs (₹{(b.total_amount / 100000).toFixed(1)}L)
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 2: 12-MONTH EXPIRY TIMELINE FORECAST */}
+          {officerTab === 'timeline' && (
+            <div className="chart-container-box">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <div>
+                  <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#fff', margin: 0 }}>
+                    📅 12-Month Forward Expiry Exposure Forecast
+                  </h3>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0.2rem 0 0' }}>
+                    Projected monthly maturity distribution of AICTE security deposits across all approved institutions.
+                  </p>
+                </div>
+              </div>
+
+              {/* Chart visualization bars */}
+              <div className="timeline-chart-bars">
+                {officerDashboard?.expiry_timeline?.map(m => {
+                  const maxAmt = Math.max(...(officerDashboard?.expiry_timeline?.map(x => x.total_amount) || [1]), 100000);
+                  const heightPercent = m.total_amount > 0 ? Math.max(14, Math.round((m.total_amount / maxAmt) * 100)) : 4;
+                  return (
+                    <div key={m.month_key} className="timeline-bar-column">
+                      <div style={{ fontSize: '0.68rem', fontWeight: 700, color: m.count > 0 ? 'var(--accent-saffron)' : '#64748b', marginBottom: '0.3rem', textAlign: 'center' }}>
+                        {m.count > 0 ? `${m.count}` : ''}
+                      </div>
+                      <div className="timeline-bar-wrapper">
+                        <div
+                          className="timeline-bar-fill"
+                          style={{
+                            height: `${heightPercent}%`,
+                            background: m.count > 0
+                              ? 'linear-gradient(180deg, #f59e0b 0%, #d97706 100%)'
+                              : 'rgba(255, 255, 255, 0.05)',
+                          }}
+                          title={`${m.month_label}: ${m.count} deposits maturing (₹${(m.total_amount / 100000).toFixed(2)} Lakhs)`}
+                        />
+                      </div>
+                      <div className="timeline-bar-month">
+                        {m.month_label.split(' ')[0]}
+                      </div>
+                      <div style={{ fontSize: '0.62rem', color: '#94a3b8', textAlign: 'center' }}>
+                        {m.count > 0 ? `₹${(m.total_amount / 100000).toFixed(0)}L` : '-'}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 3: RISK-RANKED WORKLIST */}
+          {officerTab === 'risk' && (
+            <div className="risk-worklist-card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <div>
+                  <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#fff', margin: 0 }}>
+                    ⚠️ Risk-Ranked Regulatory Worklist
+                  </h3>
+                  <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0.2rem 0 0' }}>
+                    Composite AICTE risk score (0-100) prioritizing deposits by maturity proximity, discrepancy severity, verification gaps, exposure amount, and past institutional renewal delays.
+                  </p>
+                </div>
+              </div>
+
+              {!officerDashboard?.risk_worklist || officerDashboard.risk_worklist.length === 0 ? (
+                <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>
+                  ✓ No high-risk security deposits requiring immediate intervention.
+                </div>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table className="portal-table" style={{ fontSize: '0.8rem' }}>
+                    <thead>
+                      <tr>
+                        <th>Risk Score</th>
+                        <th>Tier</th>
+                        <th>FDR Reference</th>
+                        <th>Institution</th>
+                        <th>Issuing Bank & Amount</th>
+                        <th>Days to Maturity</th>
+                        <th>Risk Factors</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {officerDashboard.risk_worklist.map(r => (
+                        <tr key={r.id}>
+                          <td>
+                            <div className="risk-score-gauge">
+                              <strong style={{ color: r.risk_score >= 70 ? '#f87171' : r.risk_score >= 50 ? '#fbbf24' : '#60a5fa' }}>
+                                {r.risk_score}
+                              </strong>
+                              <div className="risk-bar-container">
+                                <div
+                                  className="risk-bar-indicator"
+                                  style={{
+                                    width: `${r.risk_score}%`,
+                                    background: r.risk_score >= 70 ? '#ef4444' : r.risk_score >= 50 ? '#f59e0b' : '#3b82f6',
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          </td>
+                          <td>
+                            <span className={`risk-tier-pill risk-tier-${r.risk_tier.toLowerCase()}`}>
+                              {r.risk_tier}
+                            </span>
+                          </td>
+                          <td>
+                            <strong style={{ color: '#fff' }}>{r.reference_number}</strong>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{r.status}</div>
+                          </td>
+                          <td>
+                            <div style={{ fontWeight: 600, color: '#f1f5f9' }}>{r.institution_name}</div>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>AICTE: {r.institution_aicte_id}</div>
+                          </td>
+                          <td>
+                            <div>{r.issuing_bank}</div>
+                            <strong style={{ color: '#cbd5e1' }}>
+                              ₹{parseFloat(r.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                            </strong>
+                          </td>
+                          <td>
+                            {r.days_to_maturity !== null ? (
+                              <span style={{ color: r.days_to_maturity <= 0 ? '#f87171' : r.days_to_maturity <= 30 ? '#fbbf24' : '#fff', fontWeight: 600 }}>
+                                {r.days_to_maturity <= 0 ? `Overdue (${Math.abs(r.days_to_maturity)}d)` : `${r.days_to_maturity} days`}
+                              </span>
+                            ) : (
+                              '-'
+                            )}
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', maxWidth: '280px' }}>
+                              {r.risk_factors.map((f, i) => (
+                                <span key={i} className="badge" style={{ fontSize: '0.65rem', background: 'rgba(255, 255, 255, 0.06)', color: '#cbd5e1' }}>
+                                  {f}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td>
+                            <button
+                              className="btn-secondary"
+                              style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem' }}
+                              onClick={() => {
+                                const found = instruments.find(i => i.id === r.id);
+                                if (found) setSelectedInstrument(found);
+                              }}
+                            >
+                              Inspect
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
+        /* INSTITUTION DASHBOARD: SUMMARY & UPCOMING DEADLINES */
+        <div style={{ marginBottom: '2rem' }}>
+          <div className="stats-grid" style={{ marginBottom: '1.25rem' }}>
+            <div className="stat-card">
+              <div className="stat-label">Active Pledged Deposits</div>
+              <div className="stat-value" style={{ color: 'var(--accent-emerald)' }}>
+                {institutionDashboard?.summary?.active_count ?? verifiedCount}
+              </div>
+              <div className="stat-meta">
+                ₹{((institutionDashboard?.summary?.total_amount ?? totalValue) / 100000).toFixed(2)} Lakhs Total Value
+              </div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Expiring Soon</div>
+              <div className="stat-value" style={{ color: (institutionDashboard?.summary?.expiring_count ?? 0) > 0 ? 'var(--accent-saffron)' : '#fff' }}>
+                {institutionDashboard?.summary?.expiring_count ?? expiringCount}
+              </div>
+              <div className="stat-meta">Action Required Before Maturity</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Matured / Overdue</div>
+              <div className="stat-value" style={{ color: (institutionDashboard?.summary?.matured_count ?? 0) > 0 ? 'var(--accent-rose)' : '#fff' }}>
+                {institutionDashboard?.summary?.matured_count ?? maturedCount}
+              </div>
+              <div className="stat-meta">Submit Replacement FDR</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Under Scrutiny / Discrepancy</div>
+              <div className="stat-value" style={{ color: (institutionDashboard?.summary?.discrepancy_count ?? 0) > 0 ? '#fb7185' : '#38bdf8' }}>
+                {(institutionDashboard?.summary?.under_scrutiny_count ?? 0) + (institutionDashboard?.summary?.discrepancy_count ?? discrepancyCount)}
+              </div>
+              <div className="stat-meta">AICTE Officer Review Active</div>
+            </div>
+          </div>
+
+          {/* Upcoming Deadlines Console */}
+          <div className="risk-worklist-card">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <div>
+                <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#fff', margin: 0 }}>
+                  ⏱️ Upcoming Deposit Deadlines & Compliance Actions
+                </h3>
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0.2rem 0 0' }}>
+                  Institutional deadline tracker for maturity renewal, bank verification, and release eligibility.
+                </p>
+              </div>
+            </div>
+
+            {!institutionDashboard?.upcoming_deadlines || institutionDashboard.upcoming_deadlines.length === 0 ? (
+              <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.02)', borderRadius: '6px' }}>
+                ✓ No immediate deposit deadlines or compliance actions required for your institution.
+              </div>
+            ) : (
+              <div className="deadlines-list">
+                {institutionDashboard.upcoming_deadlines.map(d => (
+                  <div key={d.id} className={`deadline-item-card ${d.urgency.toLowerCase()}`}>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.3rem' }}>
+                        <strong style={{ color: '#fff', fontSize: '0.95rem' }}>{d.reference_number}</strong>
+                        <span className={`risk-tier-pill risk-tier-${d.urgency === 'OVERDUE' ? 'critical' : d.urgency.toLowerCase()}`}>
+                          {d.urgency}
+                        </span>
+                        <span className={`badge badge-status-${d.status.toLowerCase().replace(' ', '-')}`}>
+                          {d.status}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                        {d.issuing_bank} • ₹{parseFloat(d.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })} • Matures on <strong style={{ color: '#e2e8f0' }}>{d.maturity_date}</strong>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontSize: '0.82rem', fontWeight: 700, color: d.days_left <= 0 ? '#f87171' : d.days_left <= 30 ? '#fbbf24' : '#60a5fa' }}>
+                          {d.days_left <= 0 ? `OVERDUE BY ${Math.abs(d.days_left)} DAYS` : `${d.days_left} DAYS LEFT`}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
+                          {d.action_required}
+                        </div>
+                      </div>
+                      <button
+                        className="btn-primary"
+                        style={{ fontSize: '0.75rem', padding: '0.35rem 0.75rem' }}
+                        onClick={() => {
+                          const found = instruments.find(i => i.id === d.id);
+                          if (found) {
+                            setSelectedInstrument(found);
+                            if (d.days_left <= 30) setModalTab('lineage');
+                          }
+                        }}
+                      >
+                        Action Needed →
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* PHASE 6: RICH SEARCH & MULTI-PARAMETER FILTERS BAR */}
+      <div className="filter-bar-rich">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+          <h2 className="section-title" style={{ margin: 0, fontSize: '1.1rem' }}>
+            {USERS[currentUserIdx].role === 'INSTITUTION'
+              ? 'Institutional Fixed Deposit Receipts'
+              : 'National Institution Deposit Directory'}
+          </h2>
+
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            {(searchQuery || statusFilter !== 'ALL' || filterBank || filterMinAmount || filterMaxAmount || filterMaturityFrom || filterMaturityTo || filterDiscrepancyType) && (
+              <button
+                className="btn-secondary"
+                style={{ fontSize: '0.72rem', padding: '0.3rem 0.6rem', color: 'var(--text-muted)' }}
+                onClick={handleResetFilters}
+              >
+                Reset Filters
+              </button>
+            )}
+            <button
+              className="btn-secondary"
+              style={{ fontSize: '0.72rem', padding: '0.3rem 0.65rem', borderColor: 'var(--accent-saffron)', color: 'var(--accent-saffron)' }}
+              onClick={() => setIsSaveFilterModalOpen(true)}
+            >
+              ⭐ Save Preset
+            </button>
+          </div>
+        </div>
+
+        {/* Primary Filter Row */}
+        <div className="filter-controls-row">
           <input
             type="text"
-            className="search-input"
-            placeholder="Search FDR number or bank..."
+            className="filter-input-sm"
+            style={{ minWidth: '220px', flex: 1 }}
+            placeholder="Search FDR number, bank, institution, branch..."
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
           />
 
           <select
-            className="filter-select"
+            className="filter-input-sm"
             value={statusFilter}
             onChange={e => setStatusFilter(e.target.value)}
           >
@@ -1176,8 +1833,107 @@ export const App: React.FC = () => {
             <option value="Discrepancy">Discrepancy</option>
             <option value="Release Requested">Release Requested</option>
             <option value="Released">Released</option>
+            <option value="Replaced">Replaced</option>
           </select>
+
+          <select
+            className="filter-input-sm"
+            value={filterBank}
+            onChange={e => setFilterBank(e.target.value)}
+          >
+            <option value="">All Issuing Banks</option>
+            <option value="State Bank of India">State Bank of India</option>
+            <option value="HDFC Bank">HDFC Bank</option>
+            <option value="Punjab National Bank">Punjab National Bank</option>
+            <option value="ICICI Bank">ICICI Bank</option>
+            <option value="Canara Bank">Canara Bank</option>
+            <option value="Bank of Baroda">Bank of Baroda</option>
+            <option value="Axis Bank">Axis Bank</option>
+          </select>
+
+          <select
+            className="filter-input-sm"
+            value={filterDiscrepancyType}
+            onChange={e => setFilterDiscrepancyType(e.target.value)}
+          >
+            <option value="">All Discrepancy Status</option>
+            <option value="HAS_ANY">⚠️ Has Open Discrepancies</option>
+            <option value="NONE">✓ Clean (No Discrepancies)</option>
+            <option value="CRITICAL">Critical Severity Discrepancies</option>
+            <option value="HIGH">High Severity Discrepancies</option>
+            <option value="DUPLICATE_FDR_NUMBER">Duplicate FDR Number</option>
+            <option value="AMOUNT_MISMATCH_BANK">Bank Amount Mismatch</option>
+            <option value="MATURITY_BEFORE_ISSUE">Maturity Before Issue</option>
+            <option value="MISSING_LIEN_LETTER">Missing Lien Letter</option>
+            <option value="MISSING_MANDATORY_DOCUMENTS">Missing Mandatory Docs</option>
+          </select>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Amount (₹):</span>
+            <input
+              type="number"
+              className="filter-input-sm"
+              style={{ width: '90px' }}
+              placeholder="Min"
+              value={filterMinAmount}
+              onChange={e => setFilterMinAmount(e.target.value)}
+            />
+            <span style={{ color: 'var(--text-muted)' }}>-</span>
+            <input
+              type="number"
+              className="filter-input-sm"
+              style={{ width: '90px' }}
+              placeholder="Max"
+              value={filterMaxAmount}
+              onChange={e => setFilterMaxAmount(e.target.value)}
+            />
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Matures:</span>
+            <input
+              type="date"
+              className="filter-input-sm"
+              value={filterMaturityFrom}
+              onChange={e => setFilterMaturityFrom(e.target.value)}
+              title="Maturity From"
+            />
+            <span style={{ color: 'var(--text-muted)' }}>to</span>
+            <input
+              type="date"
+              className="filter-input-sm"
+              value={filterMaturityTo}
+              onChange={e => setFilterMaturityTo(e.target.value)}
+              title="Maturity To"
+            />
+          </div>
         </div>
+
+        {/* Saved Filters Preset Pills */}
+        {savedFilters.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', paddingTop: '0.4rem', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+            <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 600 }}>Saved Presets:</span>
+            {savedFilters.map(f => (
+              <span
+                key={f.id}
+                className={`saved-filter-pill ${activeSavedFilterId === f.id ? 'active' : ''}`}
+                onClick={() => handleApplySavedFilter(f)}
+              >
+                <span>⭐ {f.name}</span>
+                <span
+                  style={{ color: '#94a3b8', marginLeft: '0.2rem', cursor: 'pointer', fontWeight: 'bold' }}
+                  onClick={e => {
+                    e.stopPropagation();
+                    handleDeleteSavedFilter(f.id);
+                  }}
+                  title="Delete preset"
+                >
+                  &times;
+                </span>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Instruments Table */}
@@ -2989,6 +3745,187 @@ export const App: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* PHASE 6: REPORTS & EXPORTS MODAL */}
+      {isReportsModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsReportsModalOpen(false)}>
+          <div className="modal-content" style={{ maxWidth: '850px' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <div>
+                <h3 className="modal-title">📊 Regulatory Compliance Reports & Executive Analytics</h3>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0.2rem 0 0' }}>
+                  Download authoritative executive PDF summaries or raw audit CSVs for AICTE governance and committee meetings.
+                </p>
+              </div>
+              <button className="modal-close" onClick={() => setIsReportsModalOpen(false)}>&times;</button>
+            </div>
+
+            {/* Weekly Summary Dispatch Action Banner */}
+            <div style={{ background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: 'var(--radius-md)', padding: '1rem', marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+              <div>
+                <div style={{ fontWeight: 700, color: '#93c5fd', fontSize: '0.88rem' }}>
+                  📬 Scheduled Weekly Regulatory Summary Email
+                </div>
+                <div style={{ fontSize: '0.75rem', color: '#cbd5e1', marginTop: '0.2rem' }}>
+                  Celery Beat dispatches this automatically every Monday at 08:00 AM IST to all scrutiny officers and bureau directors.
+                </div>
+              </div>
+              <button
+                className="btn-primary"
+                style={{ fontSize: '0.78rem', padding: '0.45rem 0.9rem', background: '#2563eb' }}
+                disabled={isSendingWeeklySummary}
+                onClick={handleSendWeeklySummaryNow}
+              >
+                {isSendingWeeklySummary ? 'Dispatching Summary...' : '📧 Trigger Weekly Email Now'}
+              </button>
+            </div>
+
+            {weeklySummaryMsg && (
+              <div className="alert-box success" style={{ marginBottom: '1.25rem', fontSize: '0.8rem' }}>
+                ✓ {weeklySummaryMsg}
+              </div>
+            )}
+
+            {/* Reports Grid */}
+            <div className="reports-modal-grid">
+              {[
+                {
+                  type: 'pending_verifications',
+                  title: 'Pending CBS Verifications',
+                  icon: '🏦',
+                  desc: 'Instruments submitted by institutions awaiting scrutiny officer and bank CBS confirmation.',
+                },
+                {
+                  type: 'upcoming_maturities',
+                  title: 'Upcoming Maturities (90d)',
+                  icon: '📅',
+                  desc: 'All active security deposits reaching contractual maturity within the next 90 calendar days.',
+                },
+                {
+                  type: 'missing_documents',
+                  title: 'Missing & Incomplete Docs',
+                  icon: '📄',
+                  desc: 'Instruments flagged for missing mandatory FDR certificate scans, lien letters, or unreadable dates.',
+                },
+                {
+                  type: 'overdue_cases',
+                  title: 'Overdue & Expired Cases',
+                  icon: '🚨',
+                  desc: 'Matured deposits that have not been renewed, replaced, or formally released by the institution.',
+                },
+                {
+                  type: 'urgent_intervention',
+                  title: 'Cases Needing Intervention',
+                  icon: '⚠️',
+                  desc: 'High-risk deposits with unresolved critical discrepancy flags or regulatory compliance holds.',
+                },
+                {
+                  type: 'institution_summary',
+                  title: 'Institution-wise Summary',
+                  icon: '🏢',
+                  desc: 'Aggregate institutional portfolio summary, total deposit amounts, active counts, and compliance status.',
+                },
+              ].map(rep => (
+                <div key={rep.type} className="report-export-card">
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' }}>
+                      <span style={{ fontSize: '1.3rem' }}>{rep.icon}</span>
+                      <strong style={{ color: '#fff', fontSize: '0.9rem' }}>{rep.title}</strong>
+                    </div>
+                    <p style={{ fontSize: '0.74rem', color: 'var(--text-muted)', margin: 0, lineHeight: 1.4 }}>
+                      {rep.desc}
+                    </p>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.8rem' }}>
+                    <button
+                      className="btn-secondary"
+                      style={{ flex: 1, fontSize: '0.74rem', padding: '0.4rem 0.5rem' }}
+                      disabled={downloadingReportKey === `${rep.type}-csv`}
+                      onClick={() => handleDownloadReport(rep.type, 'csv')}
+                    >
+                      {downloadingReportKey === `${rep.type}-csv` ? 'Generating...' : '📥 CSV Export'}
+                    </button>
+                    <button
+                      className="btn-primary"
+                      style={{ flex: 1, fontSize: '0.74rem', padding: '0.4rem 0.5rem' }}
+                      disabled={downloadingReportKey === `${rep.type}-pdf`}
+                      onClick={() => handleDownloadReport(rep.type, 'pdf')}
+                    >
+                      {downloadingReportKey === `${rep.type}-pdf` ? 'Generating...' : '📄 Executive PDF'}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button className="btn-secondary" onClick={() => setIsReportsModalOpen(false)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PHASE 6: SAVE FILTER PRESET MODAL */}
+      {isSaveFilterModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsSaveFilterModalOpen(false)}>
+          <div className="modal-content" style={{ maxWidth: '480px' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">⭐ Save Filter Preset</h3>
+              <button className="modal-close" onClick={() => setIsSaveFilterModalOpen(false)}>&times;</button>
+            </div>
+
+            <div style={{ marginBottom: '1rem', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+              Save current search criteria as a 1-click filter preset for your account.
+            </div>
+
+            <div style={{ background: 'rgba(255,255,255,0.03)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', marginBottom: '1.25rem', fontSize: '0.74rem', border: '1px solid var(--border-color)' }}>
+              <div><strong>Status:</strong> {statusFilter}</div>
+              {searchQuery && <div><strong>Search:</strong> &ldquo;{searchQuery}&rdquo;</div>}
+              {filterBank && <div><strong>Bank:</strong> {filterBank}</div>}
+              {filterDiscrepancyType && <div><strong>Discrepancy:</strong> {filterDiscrepancyType}</div>}
+              {(filterMinAmount || filterMaxAmount) && (
+                <div><strong>Amount:</strong> ₹{filterMinAmount || '0'} - ₹{filterMaxAmount || 'Any'}</div>
+              )}
+              {(filterMaturityFrom || filterMaturityTo) && (
+                <div><strong>Maturity:</strong> {filterMaturityFrom || 'Any'} to {filterMaturityTo || 'Any'}</div>
+              )}
+            </div>
+
+            <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+              <label className="form-label">Preset Name *</label>
+              <input
+                type="text"
+                className="form-input"
+                placeholder="e.g., Critical SBI Expiring Soon"
+                value={saveFilterNameInput}
+                onChange={e => setSaveFilterNameInput(e.target.value)}
+                autoFocus
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem' }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setIsSaveFilterModalOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={!saveFilterNameInput.trim() || isSavingFilter}
+                onClick={handleSaveFilter}
+              >
+                {isSavingFilter ? 'Saving...' : 'Save Preset'}
+              </button>
+            </div>
           </div>
         </div>
       )}
