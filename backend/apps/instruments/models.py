@@ -82,6 +82,49 @@ class Instrument(models.Model):
         on_delete=models.SET_NULL,
         related_name='created_instruments'
     )
+
+    # Phase 5: Renewal / Replacement Lineage Tracking
+    replaces = models.ForeignKey(
+        'self',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='replacement_instruments',
+        help_text="Ancestor instrument being replaced or renewed"
+    )
+    renewal_type = models.CharField(
+        max_length=50,
+        blank=True,
+        choices=[('RENEWAL', 'Tenure Renewal'), ('REPLACEMENT', 'Replacement Instrument')],
+        default='REPLACEMENT'
+    )
+
+    # Phase 5: Release / Refund Workflow Tracking
+    release_requested_at = models.DateTimeField(null=True, blank=True)
+    release_justification = models.TextField(blank=True)
+    scrutiny_recommended_at = models.DateTimeField(null=True, blank=True)
+    scrutiny_recommendation = models.CharField(
+        max_length=50,
+        blank=True,
+        choices=[('RECOMMEND_APPROVAL', 'Recommend Approval'), ('RECOMMEND_REJECTION', 'Recommend Rejection')]
+    )
+    scrutiny_notes = models.TextField(blank=True)
+    released_at = models.DateTimeField(null=True, blank=True)
+    released_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='approved_releases'
+    )
+    release_order_reference = models.CharField(max_length=100, blank=True)
+    rejection_reason = models.TextField(blank=True)
+    compliance_hold = models.BooleanField(
+        default=False,
+        help_text="Statutory or vigilance compliance hold blocking release"
+    )
+    compliance_hold_reason = models.TextField(blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -90,10 +133,128 @@ class Instrument(models.Model):
         indexes = [
             models.Index(fields=['institution', 'status']),
             models.Index(fields=['reference_number', 'issuing_bank']),
+            models.Index(fields=['replaces', 'status']),
         ]
 
     def __str__(self):
         return f"{self.reference_number} ({self.issuing_bank}) - ₹{self.amount:,.2f} [{self.status}]"
+
+    def get_replacement_chain(self):
+        """
+        Traverses ancestors and descendants to construct the full
+        chronological replacement and renewal timeline.
+        """
+        # Find root ancestor
+        curr = self
+        visited = set()
+        while curr.replaces and curr.replaces.pk not in visited:
+            visited.add(curr.pk)
+            curr = curr.replaces
+
+        # Now traverse downwards from root
+        chain = []
+        queue = [curr]
+        seen_pks = set()
+
+        while queue:
+            node = queue.pop(0)
+            if node.pk in seen_pks:
+                continue
+            seen_pks.add(node.pk)
+
+            chain.append({
+                'id': node.id,
+                'reference_number': node.reference_number,
+                'issuing_bank': node.issuing_bank,
+                'amount': str(node.amount),
+                'status': node.status,
+                'issue_date': node.issue_date.isoformat() if node.issue_date else None,
+                'maturity_date': node.maturity_date.isoformat() if node.maturity_date else None,
+                'is_current': (node.id == self.id),
+                'replaces_id': node.replaces_id,
+                'renewal_type': node.renewal_type,
+                'created_at': node.created_at.isoformat() if node.created_at else None,
+            })
+
+            # Queue descendants
+            for child in node.replacement_instruments.all().order_by('created_at'):
+                if child.pk not in seen_pks:
+                    queue.append(child)
+
+        return sorted(chain, key=lambda x: (x['created_at'] or ''))
+
+    def evaluate_release_checklist(self, noc_reference: str = ''):
+        """
+        Evaluates regulatory release preconditions:
+        1. Bank-confirmed deposit.
+        2. Zero open discrepancies.
+        3. Prescribed conditions satisfied (lock-in period, maturity, or NOC document/reference).
+        4. No pending statutory compliance hold.
+        5. Mandatory FDR certificate document present (or official NOC reference on file).
+        """
+        from apps.common.dates import get_effective_date
+        effective_date = get_effective_date()
+
+        # 1. Bank verification check
+        has_bank_confirmed_source = self.field_sources.filter(
+            value_source=DataProvenanceSource.BANK_CONFIRMED,
+            is_confirmed=True
+        ).exists()
+        is_bank_confirmed = has_bank_confirmed_source or self.status in [
+            InstrumentStatus.VERIFIED,
+            InstrumentStatus.ACTIVE,
+            InstrumentStatus.MATURED,
+            InstrumentStatus.RELEASE_REQUESTED,
+        ]
+
+        # 2. Open discrepancies check
+        open_discrepancies_count = self.discrepancies.filter(is_resolved=False).count()
+        no_open_discrepancies = (open_discrepancies_count == 0)
+
+        # 3. Prescribed conditions (Lock-in tenure of 8-10 yrs, maturity reached, or NOC on file)
+        has_noc_document = self.documents.filter(document_type='NOC_DOCUMENT').exists() or bool(noc_reference)
+        is_matured = bool(self.maturity_date and effective_date >= self.maturity_date)
+        tenure_years = (effective_date.year - self.issue_date.year) if self.issue_date else 0
+        lock_in_satisfied = is_matured or (tenure_years >= 8) or has_noc_document
+
+        # 4. Compliance hold check
+        no_compliance_hold = not self.compliance_hold
+
+        # 5. Mandatory certificate scan present
+        has_certificate_doc = self.documents.filter(
+            document_type__in=['FDR_CERTIFICATE', 'BANK_CONFIRMATION']
+        ).exists() or bool(noc_reference)
+
+        blocking_reasons = []
+        if not is_bank_confirmed:
+            blocking_reasons.append("Deposit values have not been verified via Bank Core Banking System.")
+        if not no_open_discrepancies:
+            blocking_reasons.append(f"Instrument has {open_discrepancies_count} unresolved discrepancy flag(s).")
+        if not lock_in_satisfied:
+            blocking_reasons.append("Statutory lock-in period (8 years or scheduled maturity) has not elapsed and no AICTE Bureau NOC is attached.")
+        if not no_compliance_hold:
+            blocking_reasons.append(f"Statutory compliance hold active: {self.compliance_hold_reason or 'Under investigation'}.")
+        if not has_certificate_doc:
+            blocking_reasons.append("Mandatory FDR certificate scan or bank confirmation document missing from vault.")
+
+        can_approve = (len(blocking_reasons) == 0)
+
+        return {
+            'is_bank_confirmed': is_bank_confirmed,
+            'no_open_discrepancies': no_open_discrepancies,
+            'open_discrepancies_count': open_discrepancies_count,
+            'lock_in_satisfied': lock_in_satisfied,
+            'has_noc_document': has_noc_document,
+            'is_matured': is_matured,
+            'no_compliance_hold': no_compliance_hold,
+            'compliance_hold_reason': self.compliance_hold_reason,
+            'mandatory_documents_present': has_certificate_doc,
+            'has_required_documents': has_certificate_doc,
+            'can_approve': can_approve,
+            'all_conditions_met': can_approve,
+            'blocking_reasons': blocking_reasons,
+        }
+
 
 
 class Document(models.Model):

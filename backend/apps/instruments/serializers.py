@@ -111,6 +111,10 @@ class InstrumentSerializer(serializers.ModelSerializer):
     discrepancies = DiscrepancySerializer(many=True, read_only=True)
     remarks = serializers.SerializerMethodField()
     claimed_vs_confirmed = serializers.SerializerMethodField()
+    replaces_reference = serializers.CharField(source='replaces.reference_number', read_only=True)
+    released_by_username = serializers.CharField(source='released_by.username', read_only=True)
+    replacement_chain = serializers.SerializerMethodField()
+    release_checklist = serializers.SerializerMethodField()
 
     class Meta:
         model = Instrument
@@ -133,6 +137,23 @@ class InstrumentSerializer(serializers.ModelSerializer):
             'status',
             'trust_score',
             'ocr_extracted_data',
+            'replaces',
+            'replaces_reference',
+            'renewal_type',
+            'replacement_chain',
+            'release_checklist',
+            'release_requested_at',
+            'release_justification',
+            'scrutiny_recommended_at',
+            'scrutiny_recommendation',
+            'scrutiny_notes',
+            'released_at',
+            'released_by',
+            'released_by_username',
+            'release_order_reference',
+            'rejection_reason',
+            'compliance_hold',
+            'compliance_hold_reason',
             'field_sources',
             'documents',
             'discrepancies',
@@ -142,7 +163,11 @@ class InstrumentSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         ]
-        read_only_fields = ['id', 'trust_score', 'created_by', 'created_at', 'updated_at']
+        read_only_fields = [
+            'id', 'trust_score', 'created_by', 'created_at', 'updated_at',
+            'released_at', 'released_by', 'released_by_username', 'scrutiny_recommended_at',
+            'release_requested_at'
+        ]
 
     def get_remarks(self, obj):
         request = self.context.get('request')
@@ -176,6 +201,12 @@ class InstrumentSerializer(serializers.ModelSerializer):
                 }
         return result
 
+    def get_replacement_chain(self, obj):
+        return obj.get_replacement_chain()
+
+    def get_release_checklist(self, obj):
+        return obj.evaluate_release_checklist()
+
 
 from apps.institutions.models import Institution
 
@@ -183,6 +214,11 @@ class InstrumentCreateSerializer(serializers.ModelSerializer):
     institution = serializers.PrimaryKeyRelatedField(
         required=False,
         queryset=Institution.objects.all()
+    )
+    replaces = serializers.PrimaryKeyRelatedField(
+        queryset=Instrument.objects.all(),
+        required=False,
+        allow_null=True
     )
 
     class Meta:
@@ -201,6 +237,8 @@ class InstrumentCreateSerializer(serializers.ModelSerializer):
             'lien_in_favour_of_aicte',
             'joint_holder_name',
             'status',
+            'replaces',
+            'renewal_type',
         ]
         read_only_fields = ['id', 'status']
 
@@ -213,6 +251,13 @@ class InstrumentCreateSerializer(serializers.ModelSerializer):
             attrs['institution'] = request.user.institution
         elif 'institution' not in attrs:
             raise serializers.ValidationError({"institution": "Institution is required."})
+
+        # Validate replacement belongs to same institution
+        replaces = attrs.get('replaces')
+        inst = attrs.get('institution')
+        if replaces and inst and replaces.institution_id != inst.id:
+            raise serializers.ValidationError({"replaces": "The predecessor instrument must belong to the same institution."})
+
         return attrs
 
 
@@ -237,3 +282,29 @@ class OCRScanRequestSerializer(serializers.Serializer):
 class ReleaseDecisionSerializer(serializers.Serializer):
     decision_notes = serializers.CharField(required=False, allow_blank=True, default='')
     noc_reference = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class ReleaseRequestSerializer(serializers.Serializer):
+    justification = serializers.CharField(required=True, allow_blank=False)
+
+
+class ScrutinizeReleaseSerializer(serializers.Serializer):
+    recommendation = serializers.ChoiceField(
+        choices=['RECOMMEND_APPROVAL', 'RECOMMEND_REJECTION'],
+        default='RECOMMEND_APPROVAL'
+    )
+    notes = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class ApproveReleaseSerializer(serializers.Serializer):
+    release_order_reference = serializers.CharField(required=True, allow_blank=False)
+    decision_notes = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class RejectReleaseSerializer(serializers.Serializer):
+    rejection_reason = serializers.CharField(required=True, allow_blank=False)
+
+
+class ComplianceHoldSerializer(serializers.Serializer):
+    compliance_hold = serializers.BooleanField(required=True)
+    reason = serializers.CharField(required=False, allow_blank=True, default='')

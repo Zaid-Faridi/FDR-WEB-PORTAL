@@ -27,7 +27,13 @@ from .serializers import (
     ResolveDiscrepancySerializer,
     OCRScanRequestSerializer,
     ReleaseDecisionSerializer,
+    ReleaseRequestSerializer,
+    ScrutinizeReleaseSerializer,
+    ApproveReleaseSerializer,
+    RejectReleaseSerializer,
+    ComplianceHoldSerializer,
 )
+from .state_machine import InstrumentStateMachine
 from .engine import run_discrepancy_check, calculate_trust_score
 from .ocr import extract_fdr_fields_from_file
 from apps.common.models import DataProvenanceSource
@@ -35,6 +41,8 @@ from apps.common.audit import record_audit_event
 from apps.common.permissions import InstrumentAccessPermission
 from apps.bank_adapters.factory import get_bank_adapter
 from apps.bank_adapters.base import FDRVerificationRequest
+from apps.notifications.models import NotificationType, NotificationChannel
+from apps.notifications.sender import dispatch_notification
 
 class InstrumentViewSet(viewsets.ModelViewSet):
     """
@@ -252,31 +260,25 @@ class InstrumentViewSet(viewsets.ModelViewSet):
             # Determine status: if bank confirmed and no bank-side discrepancies, mark verified
             bank_discrepancies = bank_raw.get("discrepancies", [])
             if bank_raw["status"] == 'CONFIRMED' and not bank_discrepancies:
-                instrument.status = InstrumentStatus.VERIFIED
                 if bank_raw.get("lien_marked") is not None:
                     instrument.lien_in_favour_of_aicte = bool(bank_raw["lien_marked"])
-                instrument.save()
+                    instrument.save(update_fields=['lien_in_favour_of_aicte'])
 
-                Remark.objects.create(
+                InstrumentStateMachine.apply_transition(
                     instrument=instrument,
-                    author=user,
-                    role=getattr(user, 'role', ''),
-                    remark_type='SCRUTINY_NOTE',
-                    text=f"Bank verification confirmed via {adapter.adapter_name}. Ref: {bank_raw['bank_reference_id']}. {notes}".strip(),
-                    is_internal=False
+                    target_status=InstrumentStatus.VERIFIED,
+                    user=user,
+                    reason=f"Bank verification confirmed via {adapter.adapter_name}. Ref: {bank_raw['bank_reference_id']}. {notes}".strip(),
+                    metadata={'bank_reference_id': bank_raw['bank_reference_id'], 'adapter': adapter.adapter_name}
                 )
             else:
-                instrument.status = InstrumentStatus.DISCREPANCY
-                instrument.save()
-
                 discrepancy_msg = "; ".join(bank_raw.get("discrepancies", [])) or "Discrepancy detected during bank reconciliation."
-                Remark.objects.create(
+                InstrumentStateMachine.apply_transition(
                     instrument=instrument,
-                    author=user,
-                    role=getattr(user, 'role', ''),
-                    remark_type='DISCREPANCY_FLAG',
-                    text=f"Verification flagged discrepancies: {discrepancy_msg}. {notes}".strip(),
-                    is_internal=False
+                    target_status=InstrumentStatus.DISCREPANCY,
+                    user=user,
+                    reason=f"Verification flagged discrepancies: {discrepancy_msg}. {notes}".strip(),
+                    metadata={'bank_discrepancies': bank_discrepancies}
                 )
 
             record_audit_event(
@@ -476,22 +478,18 @@ class InstrumentViewSet(viewsets.ModelViewSet):
             raise ValidationError("Cannot verify instrument with unresolved CRITICAL discrepancies. Resolve them first.")
 
         prev_status = instrument.status
-        instrument.status = InstrumentStatus.VERIFIED
+        InstrumentStateMachine.apply_transition(
+            instrument=instrument,
+            target_status=InstrumentStatus.VERIFIED,
+            user=user,
+            reason=notes
+        )
         instrument.trust_score = calculate_trust_score(
             instrument,
             list(instrument.discrepancies.filter(is_resolved=False)),
             bank_confirmed=True
         )
-        instrument.save(update_fields=['status', 'trust_score', 'updated_at'])
-
-        Remark.objects.create(
-            instrument=instrument,
-            author=user,
-            role=getattr(user, 'role', ''),
-            remark_type='SCRUTINY_NOTE',
-            text=notes,
-            is_internal=False
-        )
+        instrument.save(update_fields=['trust_score'])
 
         record_audit_event(
             action='INSTRUMENT_VERIFIED',
@@ -539,26 +537,45 @@ class InstrumentViewSet(viewsets.ModelViewSet):
             'raw_text_preview': (ocr_result.get('raw_text') or '')[:300],
         })
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], url_path='request-release')
     def request_release(self, request, pk=None):
         """
         Initiates a formal release/refund request for the instrument.
+        Allowed for Institution users or Admins.
+        Enforces server-side transition to RELEASE_REQUESTED.
+        Timestamped, attributed, and dispatches notification to the Institution.
         """
-        instrument = self.get_object()
         user = request.user
-        prev_status = instrument.status
+        if getattr(user, 'role', None) not in ['INSTITUTION', 'ADMIN'] and not user.is_superuser:
+            raise PermissionDenied("Only the owning Technical Institution or Administrator can request deposit release.")
 
-        instrument.status = InstrumentStatus.RELEASE_REQUESTED
-        instrument.save()
+        instrument = self.get_object()
+        justification = (
+            request.data.get('justification') or
+            request.data.get('notes') or
+            'Institution submitted formal security deposit release/refund request.'
+        )
 
-        notes = request.data.get('notes', 'Institution requested deposit release/refund.')
-        Remark.objects.create(
+        now = timezone.now()
+        instrument.release_requested_at = now
+        instrument.release_justification = justification
+        instrument.save(update_fields=['release_requested_at', 'release_justification'])
+
+        InstrumentStateMachine.apply_transition(
             instrument=instrument,
-            author=user,
-            role=getattr(user, 'role', ''),
-            remark_type='APPROVAL_NOTE',
-            text=notes,
-            is_internal=False
+            target_status=InstrumentStatus.RELEASE_REQUESTED,
+            user=user,
+            reason=f"Release requested: {justification}"
+        )
+
+        dispatch_notification(
+            title=f"Release Request Submitted: FDR #{instrument.reference_number}",
+            message=f"Release/refund request for security deposit #{instrument.reference_number} (₹{instrument.amount:,.2f}) has been submitted and queued for scrutiny.",
+            notification_type=NotificationType.STATUS_CHANGE,
+            instrument=instrument,
+            recipient=instrument.created_by,
+            recipient_role='INSTITUTION',
+            dedup_key=f"release_req:{instrument.id}:{now.timestamp()}"
         )
 
         record_audit_event(
@@ -567,8 +584,8 @@ class InstrumentViewSet(viewsets.ModelViewSet):
             entity_id=str(instrument.id),
             actor_username=user.username,
             actor_role=getattr(user, 'role', ''),
-            previous_state={'status': prev_status},
-            new_state={'status': instrument.status, 'notes': notes},
+            previous_state={'status': instrument.status},
+            new_state={'status': InstrumentStatus.RELEASE_REQUESTED, 'justification': justification},
             ip_address=request.META.get('REMOTE_ADDR')
         )
 
@@ -578,33 +595,125 @@ class InstrumentViewSet(viewsets.ModelViewSet):
             'instrument': InstrumentSerializer(instrument, context={'request': request}).data
         })
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['get'], url_path='release-checklist')
+    def release_checklist(self, request, pk=None):
+        """
+        Evaluates and returns automated preconditions for release/refund.
+        """
+        instrument = self.get_object()
+        noc_ref = request.query_params.get('noc_reference', '')
+        checklist = instrument.evaluate_release_checklist(noc_reference=noc_ref)
+        return Response(checklist)
+
+    @action(detail=True, methods=['post'], url_path='scrutinize-release')
+    def scrutinize_release(self, request, pk=None):
+        """
+        Scrutiny Officer reviews the release request and records a formal recommendation.
+        Transitions instrument to UNDER_SCRUTINY.
+        """
+        user = request.user
+        if getattr(user, 'role', None) not in ['SCRUTINY_OFFICER', 'ADMIN'] and not user.is_superuser:
+            raise PermissionDenied("Only Scrutiny Officers or Administrators can scrutinize release requests.")
+
+        instrument = self.get_object()
+        serializer = ScrutinizeReleaseSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        recommendation = serializer.validated_data['recommendation']
+        notes = serializer.validated_data.get('notes', '')
+
+        now = timezone.now()
+        instrument.scrutiny_recommended_at = now
+        instrument.scrutiny_recommendation = recommendation
+        instrument.scrutiny_notes = notes
+        instrument.save(update_fields=['scrutiny_recommended_at', 'scrutiny_recommendation', 'scrutiny_notes'])
+
+        InstrumentStateMachine.apply_transition(
+            instrument=instrument,
+            target_status=InstrumentStatus.UNDER_SCRUTINY,
+            user=user,
+            reason=f"Release scrutiny completed. Recommendation: {recommendation}. {notes}".strip()
+        )
+
+        dispatch_notification(
+            title=f"Release Request Under Scrutiny: FDR #{instrument.reference_number}",
+            message=f"Release request for deposit #{instrument.reference_number} has been scrutinized by Regulation Bureau Officer. Recommendation: {recommendation}.",
+            notification_type=NotificationType.STATUS_CHANGE,
+            instrument=instrument,
+            recipient=instrument.created_by,
+            recipient_role='INSTITUTION',
+            dedup_key=f"release_scrutiny:{instrument.id}:{now.timestamp()}"
+        )
+
+        record_audit_event(
+            action='RELEASE_SCRUTINIZED',
+            entity_type='Instrument',
+            entity_id=str(instrument.id),
+            actor_username=user.username,
+            actor_role=getattr(user, 'role', ''),
+            previous_state={},
+            new_state={'recommendation': recommendation, 'notes': notes},
+            ip_address=request.META.get('REMOTE_ADDR')
+        )
+
+        return Response({
+            'status': instrument.status,
+            'message': 'Release scrutiny recommendation recorded.',
+            'instrument': InstrumentSerializer(instrument, context={'request': request}).data
+        })
+
+    @action(detail=True, methods=['post'], url_path='approve-release')
     def approve_release(self, request, pk=None):
         """
         Approving Authority action to approve a release/refund request.
         Only Approving Authority or Admin can call this.
+        Preconditions checked automatically server-side:
+        - Bank-verified deposit
+        - Zero open discrepancies
+        - Prescribed conditions (lock-in period or NOC)
+        - No pending compliance hold
+        - Mandatory documents present
+        Blocked if any precondition fails.
         """
         user = request.user
         if getattr(user, 'role', None) not in ['APPROVING_AUTHORITY', 'ADMIN'] and not user.is_superuser:
             raise PermissionDenied("Only Approving Authorities or Administrators can approve deposit release.")
 
         instrument = self.get_object()
-        serializer = ReleaseDecisionSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        decision_notes = serializer.validated_data.get('decision_notes', 'Release approved by Approving Authority.')
-        noc_ref = serializer.validated_data.get('noc_reference', '')
+        decision_notes = request.data.get('decision_notes') or request.data.get('notes') or 'Release approved by Approving Authority.'
+        noc_ref = request.data.get('noc_reference', '')
+        order_ref = request.data.get('release_order_reference') or noc_ref or f"AICTE-REL-{instrument.id}-{int(timezone.now().timestamp())}"
+
+        # Evaluate Preconditions
+        checklist = instrument.evaluate_release_checklist(noc_reference=noc_ref)
+        if not checklist['can_approve']:
+            raise ValidationError({
+                'preconditions': checklist['blocking_reasons'],
+                'detail': 'Precondition checklist not satisfied. Deposit release approval is blocked.',
+                'checklist': checklist
+            })
 
         prev_status = instrument.status
-        instrument.status = InstrumentStatus.RELEASED
-        instrument.save()
+        now = timezone.now()
+        instrument.released_at = now
+        instrument.released_by = user
+        instrument.release_order_reference = order_ref
+        instrument.save(update_fields=['released_at', 'released_by', 'release_order_reference'])
 
-        Remark.objects.create(
+        InstrumentStateMachine.apply_transition(
             instrument=instrument,
-            author=user,
-            role=getattr(user, 'role', ''),
-            remark_type='APPROVAL_NOTE',
-            text=f"RELEASE APPROVED: {decision_notes}" + (f" (NOC Ref: {noc_ref})" if noc_ref else ""),
-            is_internal=False
+            target_status=InstrumentStatus.RELEASED,
+            user=user,
+            reason=f"RELEASE APPROVED: {decision_notes}" + (f" (Order Ref: {order_ref})" if order_ref else "")
+        )
+
+        dispatch_notification(
+            title=f"Security Deposit RELEASE APPROVED: FDR #{instrument.reference_number}",
+            message=f"Deposit #{instrument.reference_number} (₹{instrument.amount:,.2f}) release/refund has been officially APPROVED under Order Ref #{order_ref}.",
+            notification_type=NotificationType.STATUS_CHANGE,
+            instrument=instrument,
+            recipient=instrument.created_by,
+            recipient_role='INSTITUTION',
+            dedup_key=f"release_approved:{instrument.id}:{now.timestamp()}"
         )
 
         record_audit_event(
@@ -614,7 +723,7 @@ class InstrumentViewSet(viewsets.ModelViewSet):
             actor_username=user.username,
             actor_role=getattr(user, 'role', ''),
             previous_state={'status': prev_status},
-            new_state={'status': instrument.status, 'notes': decision_notes, 'noc_ref': noc_ref},
+            new_state={'status': instrument.status, 'notes': decision_notes, 'noc_ref': noc_ref, 'order_ref': order_ref},
             ip_address=request.META.get('REMOTE_ADDR')
         )
 
@@ -624,32 +733,43 @@ class InstrumentViewSet(viewsets.ModelViewSet):
             'instrument': InstrumentSerializer(instrument, context={'request': request}).data
         })
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], url_path='reject-release')
     def reject_release(self, request, pk=None):
         """
-        Approving Authority action to reject a release/refund request.
-        Only Approving Authority or Admin can call this.
+        Approving Authority or Scrutiny Officer action to reject a release/refund request.
+        Mandatory rejection reason recorded and notified to institution.
         """
         user = request.user
         if getattr(user, 'role', None) not in ['APPROVING_AUTHORITY', 'ADMIN'] and not user.is_superuser:
             raise PermissionDenied("Only Approving Authorities or Administrators can reject deposit release.")
 
         instrument = self.get_object()
-        serializer = ReleaseDecisionSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        decision_notes = serializer.validated_data.get('decision_notes', 'Release rejected by Approving Authority.')
+        reason = (
+            request.data.get('rejection_reason') or
+            request.data.get('decision_notes') or
+            'Release rejected by AICTE Bureau Authority.'
+        )
 
         prev_status = instrument.status
-        instrument.status = InstrumentStatus.REJECTED
-        instrument.save()
+        now = timezone.now()
+        instrument.rejection_reason = reason
+        instrument.save(update_fields=['rejection_reason'])
 
-        Remark.objects.create(
+        InstrumentStateMachine.apply_transition(
             instrument=instrument,
-            author=user,
-            role=getattr(user, 'role', ''),
-            remark_type='REJECTION_REASON',
-            text=f"RELEASE REJECTED: {decision_notes}",
-            is_internal=False
+            target_status=InstrumentStatus.REJECTED,
+            user=user,
+            reason=f"RELEASE REJECTED: {reason}"
+        )
+
+        dispatch_notification(
+            title=f"Release Request REJECTED: FDR #{instrument.reference_number}",
+            message=f"Release request for deposit #{instrument.reference_number} has been REJECTED by AICTE Bureau. Reason: {reason}.",
+            notification_type=NotificationType.STATUS_CHANGE,
+            instrument=instrument,
+            recipient=instrument.created_by,
+            recipient_role='INSTITUTION',
+            dedup_key=f"release_rejected:{instrument.id}:{now.timestamp()}"
         )
 
         record_audit_event(
@@ -659,7 +779,7 @@ class InstrumentViewSet(viewsets.ModelViewSet):
             actor_username=user.username,
             actor_role=getattr(user, 'role', ''),
             previous_state={'status': prev_status},
-            new_state={'status': instrument.status, 'notes': decision_notes},
+            new_state={'status': instrument.status, 'notes': reason},
             ip_address=request.META.get('REMOTE_ADDR')
         )
 
@@ -667,6 +787,64 @@ class InstrumentViewSet(viewsets.ModelViewSet):
             'status': instrument.status,
             'message': 'Release rejected.',
             'instrument': InstrumentSerializer(instrument, context={'request': request}).data
+        })
+
+    @action(detail=True, methods=['post'], url_path='compliance-hold')
+    def compliance_hold(self, request, pk=None):
+        """
+        Place or remove a statutory compliance hold on an instrument.
+        """
+        user = request.user
+        if getattr(user, 'role', None) not in ['SCRUTINY_OFFICER', 'APPROVING_AUTHORITY', 'ADMIN'] and not user.is_superuser:
+            raise PermissionDenied("Only authorized officers can manage statutory compliance holds.")
+
+        instrument = self.get_object()
+        serializer = ComplianceHoldSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        hold = serializer.validated_data['compliance_hold']
+        reason = serializer.validated_data.get('reason', '')
+
+        instrument.compliance_hold = hold
+        instrument.compliance_hold_reason = reason if hold else ''
+        instrument.save(update_fields=['compliance_hold', 'compliance_hold_reason', 'updated_at'])
+
+        Remark.objects.create(
+            instrument=instrument,
+            author=user,
+            role=getattr(user, 'role', ''),
+            remark_type='SCRUTINY_NOTE',
+            text=f"Compliance hold {'PLACED' if hold else 'REMOVED'}: {reason}".strip(),
+            is_internal=False
+        )
+
+        record_audit_event(
+            action='COMPLIANCE_HOLD_UPDATED',
+            entity_type='Instrument',
+            entity_id=str(instrument.id),
+            actor_username=user.username,
+            actor_role=getattr(user, 'role', ''),
+            previous_state={},
+            new_state={'compliance_hold': hold, 'reason': reason},
+            ip_address=request.META.get('REMOTE_ADDR')
+        )
+
+        return Response({
+            'compliance_hold': instrument.compliance_hold,
+            'compliance_hold_reason': instrument.compliance_hold_reason,
+            'message': f"Compliance hold {'placed' if hold else 'cleared'} successfully.",
+            'instrument': InstrumentSerializer(instrument, context={'request': request}).data
+        })
+
+    @action(detail=True, methods=['get'], url_path='lineage')
+    def lineage(self, request, pk=None):
+        """
+        Returns full linked replacement and renewal timeline chain.
+        """
+        instrument = self.get_object()
+        chain = instrument.get_replacement_chain()
+        return Response({
+            'current_instrument_id': instrument.id,
+            'timeline': chain
         })
 
     @action(detail=True, methods=['get', 'post'])
