@@ -74,6 +74,37 @@ export interface DiscrepancyItem {
   created_at: string;
 }
 
+export interface TimelineNode {
+  id: number;
+  reference_number: string;
+  issuing_bank: string;
+  amount: string;
+  status: InstrumentStatus;
+  issue_date: string | null;
+  maturity_date: string | null;
+  is_current: boolean;
+  replaces_id: number | null;
+  renewal_type?: string | null;
+  generation?: number;
+  created_at: string | null;
+}
+
+export interface ReleaseChecklist {
+  is_bank_confirmed: boolean;
+  no_open_discrepancies: boolean;
+  open_discrepancies_count: number;
+  lock_in_satisfied: boolean;
+  has_noc_document: boolean;
+  is_matured: boolean;
+  no_compliance_hold: boolean;
+  compliance_hold_reason: string;
+  mandatory_documents_present: boolean;
+  has_required_documents?: boolean;
+  can_approve: boolean;
+  all_conditions_met?: boolean;
+  blocking_reasons: string[];
+}
+
 export interface InstrumentItem {
   id: number;
   institution: number;
@@ -93,6 +124,23 @@ export interface InstrumentItem {
   status: InstrumentStatus;
   trust_score: number;
   ocr_extracted_data?: Record<string, any>;
+  replaces?: number | null;
+  replaces_reference?: string | null;
+  renewal_type?: string;
+  replacement_chain?: TimelineNode[];
+  release_checklist?: ReleaseChecklist;
+  release_requested_at?: string | null;
+  release_justification?: string;
+  scrutiny_recommended_at?: string | null;
+  scrutiny_recommendation?: string;
+  scrutiny_notes?: string;
+  released_at?: string | null;
+  released_by?: number | null;
+  released_by_username?: string | null;
+  release_order_reference?: string;
+  rejection_reason?: string;
+  compliance_hold?: boolean;
+  compliance_hold_reason?: string;
   field_sources: FieldSourceItem[];
   documents: DocumentItem[];
   discrepancies: DiscrepancyItem[];

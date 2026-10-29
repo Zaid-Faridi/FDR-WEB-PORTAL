@@ -12,7 +12,7 @@ load_dotenv(BASE_DIR / '.env')
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'default-insecure-dev-key-change-in-production')
 DEBUG = os.getenv('DEBUG', 'True').lower() in ('true', '1', 'yes')
 
-ALLOWED_HOSTS = [host.strip() for host in os.getenv('ALLOWED_HOSTS', '*').split(',') if host.strip()]
+ALLOWED_HOSTS = list(set([host.strip() for host in os.getenv('ALLOWED_HOSTS', '*').split(',') if host.strip()] + ['testserver', 'localhost', '127.0.0.1']))
 
 AUTH_USER_MODEL = 'users.User'
 

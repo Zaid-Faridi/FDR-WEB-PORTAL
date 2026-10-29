@@ -33,7 +33,7 @@ export const App: React.FC = () => {
   // Modals & Navigation
   const [isSubmitModalOpen, setIsSubmitModalOpen] = useState<boolean>(false);
   const [selectedInstrument, setSelectedInstrument] = useState<InstrumentItem | null>(null);
-  const [modalTab, setModalTab] = useState<'overview' | 'discrepancies' | 'documents' | 'remarks'>('overview');
+  const [modalTab, setModalTab] = useState<'overview' | 'discrepancies' | 'documents' | 'remarks' | 'lineage' | 'release'>('overview');
 
   // Phase 4: Simulated Date & Monitoring Job State
   const [simulatedDateInfo, setSimulatedDateInfo] = useState<SimulatedDateInfo | null>(null);
@@ -101,6 +101,26 @@ export const App: React.FC = () => {
   const [newRemarkText, setNewRemarkText] = useState<string>('');
   const [newRemarkType, setNewRemarkType] = useState<string>('SCRUTINY_NOTE');
   const [isSubmittingRemark, setIsSubmittingRemark] = useState<boolean>(false);
+
+  // Phase 5: Renewal / Replacement State
+  const [replacesId, setReplacesId] = useState<string>('');
+  const [renewalType, setRenewalType] = useState<string>('REPLACEMENT');
+
+  // Phase 5: Release & Refund State
+  const [releaseJustification, setReleaseJustification] = useState<string>('');
+  const [isRequestingRelease, setIsRequestingRelease] = useState<boolean>(false);
+  const [scrutinyRecommendation, setScrutinyRecommendation] = useState<'RECOMMEND_RELEASE' | 'FLAG_FOR_AUDIT'>('RECOMMEND_RELEASE');
+  const [scrutinyNotes, setScrutinyNotes] = useState<string>('Preconditions verified; recommend release.');
+  const [isScrutinizing, setIsScrutinizing] = useState<boolean>(false);
+  const [sanctionOrderRef, setSanctionOrderRef] = useState<string>('');
+  const [sanctionNotes, setSanctionNotes] = useState<string>('Sanctioned per AICTE Deposit Regulations.');
+  const [isSanctioning, setIsSanctioning] = useState<boolean>(false);
+  const [rejectionReasonInput, setRejectionReasonInput] = useState<string>('');
+  const [isRejecting, setIsRejecting] = useState<boolean>(false);
+  const [holdReason, setHoldReason] = useState<string>('');
+  const [isTogglingHold, setIsTogglingHold] = useState<boolean>(false);
+  const [releaseActionSuccess, setReleaseActionSuccess] = useState<string>('');
+  const [releaseActionError, setReleaseActionError] = useState<string>('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const ocrFileInputRef = useRef<HTMLInputElement>(null);
@@ -473,6 +493,11 @@ export const App: React.FC = () => {
     formData.append('lien_in_favour_of_aicte', lienMarked ? 'true' : 'false');
     formData.append('joint_holder_name', jointHolder || `${userProfile?.institution_name || 'Institution'} and AICTE`);
 
+    if (replacesId) {
+      formData.append('replaces', replacesId);
+      formData.append('renewal_type', renewalType);
+    }
+
     if (selectedFile) {
       formData.append('fdr_certificate', selectedFile);
       formData.append('fdr_certificate_type', 'FDR_CERTIFICATE');
@@ -499,6 +524,8 @@ export const App: React.FC = () => {
           setSelectedFile(null);
           setFileHashPreview('');
           setOcrExtractedData(null);
+          setReplacesId('');
+          setRenewalType('REPLACEMENT');
           setSubmitSuccess('');
         }, 1500);
       } else {
@@ -719,6 +746,190 @@ export const App: React.FC = () => {
       console.error('Add remark error:', err);
     } finally {
       setIsSubmittingRemark(false);
+    }
+  };
+
+  // Phase 5: Release & Refund Handlers
+  const handleRequestRelease = async () => {
+    if (!selectedInstrument || !releaseJustification.trim()) {
+      alert('Please provide a justification for deposit release/refund.');
+      return;
+    }
+    setIsRequestingRelease(true);
+    setReleaseActionError('');
+    setReleaseActionSuccess('');
+    try {
+      const res = await fetch(`/api/instruments/${selectedInstrument.id}/request-release/`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ justification: releaseJustification.trim() }),
+      });
+      if (res.ok) {
+        setReleaseActionSuccess('Release & refund application submitted successfully. Now routed for scrutiny.');
+        setReleaseJustification('');
+        fetchInstruments(authToken);
+        refreshSingleInstrument(selectedInstrument.id);
+        fetchNotifications(authToken);
+      } else {
+        const err = await res.json();
+        setReleaseActionError(typeof err === 'object' ? JSON.stringify(err) : 'Failed to submit release request.');
+      }
+    } catch (err) {
+      console.error('Request release error:', err);
+      setReleaseActionError('Network error while requesting release.');
+    } finally {
+      setIsRequestingRelease(false);
+    }
+  };
+
+  const handleScrutinizeRelease = async () => {
+    if (!selectedInstrument) return;
+    setIsScrutinizing(true);
+    setReleaseActionError('');
+    setReleaseActionSuccess('');
+    try {
+      const res = await fetch(`/api/instruments/${selectedInstrument.id}/scrutinize-release/`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          recommendation: scrutinyRecommendation,
+          notes: scrutinyNotes,
+        }),
+      });
+      if (res.ok) {
+        setReleaseActionSuccess('Scrutiny findings recorded and routed to Approving Authority.');
+        fetchInstruments(authToken);
+        refreshSingleInstrument(selectedInstrument.id);
+        fetchNotifications(authToken);
+      } else {
+        const err = await res.json();
+        setReleaseActionError(typeof err === 'object' ? JSON.stringify(err) : 'Failed to scrutinize release.');
+      }
+    } catch (err) {
+      console.error('Scrutinize release error:', err);
+      setReleaseActionError('Network error during release scrutiny.');
+    } finally {
+      setIsScrutinizing(false);
+    }
+  };
+
+  const handleApproveRelease = async () => {
+    if (!selectedInstrument) return;
+    if (!sanctionOrderRef.trim()) {
+      alert('Please enter the official Release Sanction Order Reference.');
+      return;
+    }
+    setIsSanctioning(true);
+    setReleaseActionError('');
+    setReleaseActionSuccess('');
+    try {
+      const res = await fetch(`/api/instruments/${selectedInstrument.id}/approve-release/`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          order_reference: sanctionOrderRef.trim(),
+          notes: sanctionNotes,
+        }),
+      });
+      if (res.ok) {
+        setReleaseActionSuccess('Official Release & Refund Order Sanctioned! Status transitioned to Released.');
+        setSanctionOrderRef('');
+        setSanctionNotes('');
+        fetchInstruments(authToken);
+        refreshSingleInstrument(selectedInstrument.id);
+        fetchNotifications(authToken);
+      } else {
+        const err = await res.json();
+        setReleaseActionError(typeof err === 'object' ? JSON.stringify(err) : 'Failed to approve release.');
+      }
+    } catch (err) {
+      console.error('Approve release error:', err);
+      setReleaseActionError('Network error during release approval.');
+    } finally {
+      setIsSanctioning(false);
+    }
+  };
+
+  const handleRejectRelease = async () => {
+    if (!selectedInstrument || !rejectionReasonInput.trim()) {
+      alert('Please enter a formal reason for rejecting the release application.');
+      return;
+    }
+    setIsRejecting(true);
+    setReleaseActionError('');
+    setReleaseActionSuccess('');
+    try {
+      const res = await fetch(`/api/instruments/${selectedInstrument.id}/reject-release/`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          rejection_reason: rejectionReasonInput.trim(),
+        }),
+      });
+      if (res.ok) {
+        setReleaseActionSuccess('Release application rejected with statutory notification dispatched to the institution.');
+        setRejectionReasonInput('');
+        fetchInstruments(authToken);
+        refreshSingleInstrument(selectedInstrument.id);
+        fetchNotifications(authToken);
+      } else {
+        const err = await res.json();
+        setReleaseActionError(typeof err === 'object' ? JSON.stringify(err) : 'Failed to reject release.');
+      }
+    } catch (err) {
+      console.error('Reject release error:', err);
+      setReleaseActionError('Network error during release rejection.');
+    } finally {
+      setIsRejecting(false);
+    }
+  };
+
+  const handleToggleComplianceHold = async () => {
+    if (!selectedInstrument) return;
+    const willHold = !selectedInstrument.compliance_hold;
+    let reason = holdReason;
+    if (willHold && !reason.trim()) {
+      const input = prompt('Enter statutory compliance hold reason (e.g., Pending dispute, CBI inquiry, audit block):');
+      if (!input) return;
+      reason = input;
+    }
+    setIsTogglingHold(true);
+    try {
+      const res = await fetch(`/api/instruments/${selectedInstrument.id}/compliance-hold/`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          compliance_hold: willHold,
+          reason: reason || 'Statutory hold updated',
+        }),
+      });
+      if (res.ok) {
+        setHoldReason('');
+        fetchInstruments(authToken);
+        refreshSingleInstrument(selectedInstrument.id);
+      } else {
+        const err = await res.json();
+        alert(`Failed to update compliance hold: ${JSON.stringify(err)}`);
+      }
+    } catch (err) {
+      console.error('Compliance hold toggle error:', err);
+    } finally {
+      setIsTogglingHold(false);
     }
   };
 
@@ -1478,6 +1689,45 @@ export const App: React.FC = () => {
                   />
                 </div>
 
+                {/* Phase 5: Renewal / Replacement Linking Section */}
+                <div className="form-group full-width" style={{ background: 'rgba(59, 130, 246, 0.05)', padding: '0.85rem', borderRadius: '6px', border: '1px dashed rgba(59, 130, 246, 0.3)' }}>
+                  <label className="form-label" style={{ color: '#60a5fa', display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem' }}>
+                    <span>🔗 Link to Existing FDR (Renewal / Replacement)</span>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>(Optional)</span>
+                  </label>
+                  <select
+                    className="form-input"
+                    value={replacesId}
+                    onChange={e => setReplacesId(e.target.value)}
+                    style={{ marginBottom: '0.6rem' }}
+                  >
+                    <option value="">-- None (Standalone Initial Security Deposit) --</option>
+                    {instruments.map(inst => (
+                      <option key={inst.id} value={inst.id}>
+                        {inst.reference_number} • {inst.issuing_bank} (₹{Number(inst.amount || 0).toLocaleString('en-IN')}) [{inst.status}]
+                      </option>
+                    ))}
+                  </select>
+                  {replacesId && (
+                    <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Type:</span>
+                        <select
+                          className="filter-select"
+                          value={renewalType}
+                          onChange={e => setRenewalType(e.target.value)}
+                        >
+                          <option value="REPLACEMENT">Replacement (New deposit replaces existing)</option>
+                          <option value="RENEWAL">Renewal (Maturity rollover / extension)</option>
+                        </select>
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: '#93c5fd', fontStyle: 'italic' }}>
+                        ⚡ Automated Chaining: When this new instrument is verified by the officer, the linked FDR will automatically transition to 'Replaced' and maintain full lineage history.
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <div className="form-group full-width">
                   <label className="form-checkbox-label">
                     <input
@@ -1670,6 +1920,18 @@ export const App: React.FC = () => {
                 onClick={() => setModalTab('remarks')}
               >
                 Audit Timeline ({selectedInstrument.remarks?.length || 0})
+              </button>
+              <button
+                className={`tab-btn ${modalTab === 'lineage' ? 'active' : ''}`}
+                onClick={() => setModalTab('lineage')}
+              >
+                ⛓️ Lineage Timeline ({selectedInstrument.replacement_chain?.length || 1})
+              </button>
+              <button
+                className={`tab-btn ${modalTab === 'release' ? 'active' : ''}`}
+                onClick={() => setModalTab('release')}
+              >
+                🏛️ Release & Refund
               </button>
             </div>
 
@@ -2133,6 +2395,500 @@ export const App: React.FC = () => {
                     {isSubmittingRemark ? 'Posting...' : 'Post Remark'}
                   </button>
                 </div>
+              </div>
+            )}
+
+            {/* TAB 5: REPLACEMENT & RENEWAL LINEAGE TIMELINE */}
+            {modalTab === 'lineage' && (
+              <div className="lineage-timeline-wrapper">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                  <div>
+                    <h4 style={{ fontSize: '1rem', color: '#fff', margin: 0 }}>
+                      Deposit Renewal & Replacement History
+                    </h4>
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0.2rem 0 0' }}>
+                      Complete chronological chain of instruments showing initial deposit and all successive replacements.
+                    </p>
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--accent-saffron)', background: 'rgba(245,158,11,0.1)', padding: '0.3rem 0.65rem', borderRadius: '4px', border: '1px solid rgba(245,158,11,0.3)' }}>
+                    Chain Length: {selectedInstrument.replacement_chain?.length || 1} Instruments
+                  </div>
+                </div>
+
+                <div className="lineage-timeline">
+                  {((selectedInstrument.replacement_chain && selectedInstrument.replacement_chain.length > 0)
+                    ? selectedInstrument.replacement_chain
+                    : [{
+                        id: selectedInstrument.id,
+                        reference_number: selectedInstrument.reference_number,
+                        issuing_bank: selectedInstrument.issuing_bank,
+                        amount: selectedInstrument.amount,
+                        issue_date: selectedInstrument.issue_date,
+                        maturity_date: selectedInstrument.maturity_date,
+                        status: selectedInstrument.status,
+                        renewal_type: selectedInstrument.renewal_type || null,
+                        replaces_id: selectedInstrument.replaces || null,
+                        generation: 1,
+                        is_current: true,
+                        created_at: selectedInstrument.created_at,
+                      }]
+                  ).map((node, index, arr) => {
+                    const isSelected = node.id === selectedInstrument.id;
+                    const isLast = index === arr.length - 1;
+                    return (
+                      <div key={node.id} className={`timeline-node-card ${isSelected ? 'current' : ''}`}>
+                        <div className="timeline-track-col">
+                          <div className={`timeline-dot ${isSelected ? 'current' : node.status === 'Replaced' ? 'replaced' : ''}`}>
+                            {node.generation || index + 1}
+                          </div>
+                          {!isLast && <div className="timeline-line"></div>}
+                        </div>
+                        <div className="timeline-details">
+                          <div className="timeline-title-row">
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                              <span className="timeline-ref">{node.reference_number}</span>
+                              <span className={`status-badge status-${node.status.toLowerCase().replace(/\s+/g, '-')}`}>
+                                {node.status}
+                              </span>
+                              {isSelected && (
+                                <span style={{ fontSize: '0.68rem', background: 'var(--accent-saffron)', color: '#000', fontWeight: 800, padding: '0.1rem 0.45rem', borderRadius: '3px' }}>
+                                  CURRENT VIEW
+                                </span>
+                              )}
+                              {node.renewal_type && (
+                                <span style={{ fontSize: '0.68rem', background: 'rgba(59,130,246,0.2)', color: '#93c5fd', padding: '0.1rem 0.45rem', borderRadius: '3px', border: '1px solid rgba(59,130,246,0.3)' }}>
+                                  {node.renewal_type}
+                                </span>
+                              )}
+                            </div>
+                            {!isSelected && (
+                              <button
+                                className="btn-secondary"
+                                style={{ padding: '0.25rem 0.65rem', fontSize: '0.72rem' }}
+                                onClick={() => refreshSingleInstrument(node.id)}
+                              >
+                                View Details ↗
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="timeline-meta-grid">
+                            <div>
+                              <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Bank & Branch</div>
+                              <div style={{ color: '#fff', fontWeight: 600 }}>{node.issuing_bank}</div>
+                            </div>
+                            <div>
+                              <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Principal Amount</div>
+                              <div style={{ color: 'var(--accent-emerald)', fontWeight: 700 }}>
+                                ₹{Number(node.amount || 0).toLocaleString('en-IN')}
+                              </div>
+                            </div>
+                            <div>
+                              <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Deposit Date</div>
+                              <div style={{ color: '#e2e8f0' }}>{node.issue_date}</div>
+                            </div>
+                            <div>
+                              <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Maturity Date</div>
+                              <div style={{ color: '#e2e8f0' }}>{node.maturity_date}</div>
+                            </div>
+                          </div>
+
+                          {node.status === 'Replaced' && (
+                            <div style={{ marginTop: '0.6rem', fontSize: '0.73rem', color: '#94a3b8', fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <span>🔄</span> Replaced in AICTE records by subsequent verified instrument.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* TAB 6: RELEASE & REFUND WORKFLOW CONSOLE */}
+            {modalTab === 'release' && (
+              <div>
+                {/* Header */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1.2rem' }}>
+                  <div>
+                    <h4 style={{ fontSize: '1rem', color: '#fff', margin: 0 }}>
+                      AICTE Security Deposit Release & Refund Workflow
+                    </h4>
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', margin: '0.2rem 0 0' }}>
+                      Enforced 4-stage lifecycle: Request → Scrutiny → Approver Sanction → Release.
+                    </p>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <span className={`status-badge status-${selectedInstrument.status.toLowerCase().replace(/\s+/g, '-')}`} style={{ fontSize: '0.85rem' }}>
+                      Status: {selectedInstrument.status}
+                    </span>
+                    {selectedInstrument.compliance_hold && (
+                      <div style={{ marginTop: '0.35rem' }}>
+                        <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.68rem', fontWeight: 800, padding: '0.15rem 0.5rem', borderRadius: '4px' }}>
+                          ⛔ COMPLIANCE HOLD ACTIVE
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Preconditions Checklist Cards */}
+                <div style={{ marginBottom: '1.25rem' }}>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#f8fafc', marginBottom: '0.65rem' }}>
+                    Automated Statutory Preconditions Checklist
+                  </div>
+                  <div className="checklist-grid">
+                    {/* 1. Bank Verification */}
+                    <div className={`checklist-card ${selectedInstrument.release_checklist?.is_bank_confirmed ? 'pass' : 'fail'}`}>
+                      <div className="checklist-header">
+                        <span className="checklist-title">1. CBS Bank-Verified</span>
+                        <span className={`checklist-status-pill ${selectedInstrument.release_checklist?.is_bank_confirmed ? 'pass' : 'fail'}`}>
+                          {selectedInstrument.release_checklist?.is_bank_confirmed ? 'PASSED' : 'FAILED'}
+                        </span>
+                      </div>
+                      <div className="checklist-desc">
+                        {selectedInstrument.release_checklist?.is_bank_confirmed
+                          ? 'Instrument confirmed authentic by Core Banking System adapter.'
+                          : 'Deposit not verified by issuing bank CBS adapter.'}
+                      </div>
+                    </div>
+
+                    {/* 2. Zero Discrepancies */}
+                    <div className={`checklist-card ${selectedInstrument.release_checklist?.no_open_discrepancies ? 'pass' : 'fail'}`}>
+                      <div className="checklist-header">
+                        <span className="checklist-title">2. Discrepancies Clean</span>
+                        <span className={`checklist-status-pill ${selectedInstrument.release_checklist?.no_open_discrepancies ? 'pass' : 'fail'}`}>
+                          {selectedInstrument.release_checklist?.no_open_discrepancies ? 'PASSED' : 'FAILED'}
+                        </span>
+                      </div>
+                      <div className="checklist-desc">
+                        {selectedInstrument.release_checklist?.no_open_discrepancies
+                          ? 'Zero unresolved flags in the discrepancy detection engine.'
+                          : `${selectedInstrument.discrepancies?.filter(d => !d.is_resolved).length || 0} unresolved discrepancy flags detected.`}
+                      </div>
+                    </div>
+
+                    {/* 3. Lock-in Tenure or NOC */}
+                    <div className={`checklist-card ${selectedInstrument.release_checklist?.lock_in_satisfied ? 'pass' : 'warn'}`}>
+                      <div className="checklist-header">
+                        <span className="checklist-title">3. Lock-in / NOC</span>
+                        <span className={`checklist-status-pill ${selectedInstrument.release_checklist?.lock_in_satisfied ? 'pass' : 'warn'}`}>
+                          {selectedInstrument.release_checklist?.lock_in_satisfied ? 'PASSED' : 'PENDING'}
+                        </span>
+                      </div>
+                      <div className="checklist-desc">
+                        {selectedInstrument.release_checklist?.lock_in_satisfied
+                          ? '8-year statutory lock-in completed or official NOC satisfied.'
+                          : 'Within mandatory 8-year lock-in period; requires Council NOC.'}
+                      </div>
+                    </div>
+
+                    {/* 4. Compliance Hold Status */}
+                    <div className={`checklist-card ${selectedInstrument.release_checklist?.no_compliance_hold ? 'pass' : 'fail'}`}>
+                      <div className="checklist-header">
+                        <span className="checklist-title">4. Compliance Hold</span>
+                        <span className={`checklist-status-pill ${selectedInstrument.release_checklist?.no_compliance_hold ? 'pass' : 'fail'}`}>
+                          {selectedInstrument.release_checklist?.no_compliance_hold ? 'CLEARED' : 'BLOCKED'}
+                        </span>
+                      </div>
+                      <div className="checklist-desc">
+                        {selectedInstrument.release_checklist?.no_compliance_hold
+                          ? 'No pending regulatory, CBI, or court compliance holds.'
+                          : `Hold Active: ${selectedInstrument.compliance_hold_reason || 'Pending inquiry'}`}
+                      </div>
+                    </div>
+
+                    {/* 5. Mandatory Documents */}
+                    <div className={`checklist-card ${selectedInstrument.release_checklist?.has_required_documents ? 'pass' : 'fail'}`}>
+                      <div className="checklist-header">
+                        <span className="checklist-title">5. Vault Certificates</span>
+                        <span className={`checklist-status-pill ${selectedInstrument.release_checklist?.has_required_documents ? 'pass' : 'fail'}`}>
+                          {selectedInstrument.release_checklist?.has_required_documents ? 'PRESENT' : 'MISSING'}
+                        </span>
+                      </div>
+                      <div className="checklist-desc">
+                        {selectedInstrument.release_checklist?.has_required_documents
+                          ? 'Mandatory FDR certificate encrypted and verified in storage.'
+                          : 'Mandatory certificate documents not found in secure vault.'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Overall Gate Summary Banner */}
+                  <div
+                    style={{
+                      padding: '0.85rem 1rem',
+                      borderRadius: '6px',
+                      background: selectedInstrument.release_checklist?.all_conditions_met ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
+                      border: `1px solid ${selectedInstrument.release_checklist?.all_conditions_met ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)'}`,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                      <span style={{ fontSize: '1.2rem' }}>
+                        {selectedInstrument.release_checklist?.all_conditions_met ? '✅' : '⛔'}
+                      </span>
+                      <div>
+                        <div style={{ fontSize: '0.85rem', fontWeight: 700, color: selectedInstrument.release_checklist?.all_conditions_met ? '#34d399' : '#f87171' }}>
+                          {selectedInstrument.release_checklist?.all_conditions_met
+                            ? 'All Statutory Preconditions Satisfied — Eligible for Release Sanction'
+                            : 'Release Gate Blocked — Statutory Preconditions Not Met'}
+                        </div>
+                        <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                          {selectedInstrument.release_checklist?.all_conditions_met
+                            ? 'The Approving Authority can formally sign and release the security deposit.'
+                            : 'All 5 preconditions must be met before sanction order can be executed.'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Audit & Workflow Milestones Timeline */}
+                <div style={{ background: 'rgba(0,0,0,0.25)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border-color)', marginBottom: '1.25rem' }}>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '0.6rem' }}>
+                    Workflow Milestone Audit History
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.8rem', fontSize: '0.78rem' }}>
+                    <div>
+                      <div style={{ color: 'var(--text-muted)' }}>1. Release Requested</div>
+                      <div style={{ color: '#fff', fontWeight: 600 }}>
+                        {selectedInstrument.release_requested_at ? new Date(selectedInstrument.release_requested_at).toLocaleString() : 'Not Yet Requested'}
+                      </div>
+                      {selectedInstrument.release_justification && (
+                        <div style={{ color: '#94a3b8', fontSize: '0.72rem', marginTop: '0.2rem' }}>
+                          "{selectedInstrument.release_justification}"
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <div style={{ color: 'var(--text-muted)' }}>2. Officer Scrutiny</div>
+                      <div style={{ color: '#fff', fontWeight: 600 }}>
+                        {selectedInstrument.scrutiny_recommended_at ? new Date(selectedInstrument.scrutiny_recommended_at).toLocaleString() : 'Pending Scrutiny'}
+                      </div>
+                      {selectedInstrument.scrutiny_recommendation && (
+                        <div style={{ color: '#38bdf8', fontSize: '0.72rem', marginTop: '0.2rem' }}>
+                          {selectedInstrument.scrutiny_recommendation} • {selectedInstrument.scrutiny_notes}
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <div style={{ color: 'var(--text-muted)' }}>3. Final Sanction / Release</div>
+                      <div style={{ color: '#fff', fontWeight: 600 }}>
+                        {selectedInstrument.released_at ? new Date(selectedInstrument.released_at).toLocaleString() : 'Pending Sanction'}
+                      </div>
+                      {selectedInstrument.release_order_reference && (
+                        <div style={{ color: '#34d399', fontSize: '0.72rem', marginTop: '0.2rem' }}>
+                          Order Ref: {selectedInstrument.release_order_reference}
+                        </div>
+                      )}
+                      {selectedInstrument.rejection_reason && (
+                        <div style={{ color: '#fb7185', fontSize: '0.72rem', marginTop: '0.2rem' }}>
+                          Rejection Reason: {selectedInstrument.rejection_reason}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Release Feedback Messages */}
+                {releaseActionSuccess && (
+                  <div style={{ padding: '0.75rem', background: 'rgba(16,185,129,0.15)', border: '1px solid #10b981', color: '#34d399', borderRadius: '6px', fontSize: '0.8rem', marginBottom: '1rem' }}>
+                    ✓ {releaseActionSuccess}
+                  </div>
+                )}
+                {releaseActionError && (
+                  <div style={{ padding: '0.75rem', background: 'rgba(239,68,68,0.15)', border: '1px solid #ef4444', color: '#f87171', borderRadius: '6px', fontSize: '0.8rem', marginBottom: '1rem' }}>
+                    ⚠️ {releaseActionError}
+                  </div>
+                )}
+
+                {/* ROLE-SPECIFIC ACTION PANELS */}
+
+                {/* 1. Institution Panel */}
+                {USERS[currentUserIdx].role === 'INSTITUTION' && (
+                  <div className="release-action-panel">
+                    <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#fff', marginBottom: '0.5rem' }}>
+                      Institution Release & Refund Application
+                    </div>
+                    {selectedInstrument.status === 'Released' ? (
+                      <div style={{ color: '#34d399', fontSize: '0.82rem' }}>
+                        🎉 Deposit successfully released! Refund has been processed to your registered institution account.
+                      </div>
+                    ) : selectedInstrument.status === 'Release Requested' ? (
+                      <div style={{ color: '#38bdf8', fontSize: '0.82rem' }}>
+                        ⏳ Release application submitted on {new Date(selectedInstrument.release_requested_at || '').toLocaleDateString()}. Currently under review by AICTE Scrutiny Officers.
+                      </div>
+                    ) : selectedInstrument.status === 'Replaced' ? (
+                      <div style={{ color: '#94a3b8', fontSize: '0.82rem' }}>
+                        This instrument has already been replaced by a subsequent deposit. Release must be requested for the active replacement instrument.
+                      </div>
+                    ) : (
+                      <div>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.8rem' }}>
+                          Submit an official request to AICTE Regulation Bureau for deposit release and refund.
+                        </div>
+                        <textarea
+                          className="form-textarea"
+                          rows={2}
+                          placeholder="Provide justification (e.g., Completion of 8-year lock-in period / AICTE Closure Approval NOC reference)..."
+                          value={releaseJustification}
+                          onChange={e => setReleaseJustification(e.target.value)}
+                          style={{ width: '100%', marginBottom: '0.8rem' }}
+                        />
+                        <button
+                          className="btn-primary"
+                          disabled={isRequestingRelease || !releaseJustification.trim()}
+                          onClick={handleRequestRelease}
+                        >
+                          {isRequestingRelease ? 'Submitting Application...' : 'Submit Release Application'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 2. Scrutiny Officer Panel */}
+                {(USERS[currentUserIdx].role === 'SCRUTINY_OFFICER' || USERS[currentUserIdx].role === 'ADMIN') && (
+                  <div className="release-action-panel">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.8rem' }}>
+                      <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#fff' }}>
+                        Scrutiny Officer Precondition Review & Recommendation
+                      </div>
+                      <button
+                        className="btn-secondary"
+                        style={{ fontSize: '0.75rem', borderColor: selectedInstrument.compliance_hold ? '#ef4444' : 'var(--border-color)', color: selectedInstrument.compliance_hold ? '#f87171' : '#fff' }}
+                        onClick={handleToggleComplianceHold}
+                        disabled={isTogglingHold}
+                      >
+                        {isTogglingHold ? 'Updating...' : selectedInstrument.compliance_hold ? '🔓 Remove Compliance Hold' : '⛔ Apply Compliance Hold'}
+                      </button>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.8rem', marginBottom: '0.8rem' }}>
+                      <div>
+                        <label className="form-label">Scrutiny Recommendation</label>
+                        <select
+                          className="filter-select"
+                          value={scrutinyRecommendation}
+                          onChange={e => setScrutinyRecommendation(e.target.value as any)}
+                          style={{ width: '100%' }}
+                        >
+                          <option value="RECOMMEND_RELEASE">Recommend Release to Approving Authority</option>
+                          <option value="FLAG_FOR_AUDIT">Flag Deficiencies / Request Rectification</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="form-label">Scrutiny Notes & Observations</label>
+                        <input
+                          type="text"
+                          className="form-input"
+                          placeholder="e.g. Verified with bank CBS; all certificates in order."
+                          value={scrutinyNotes}
+                          onChange={e => setScrutinyNotes(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      className="btn-secondary"
+                      disabled={isScrutinizing || selectedInstrument.status === 'Released' || selectedInstrument.status === 'Replaced'}
+                      onClick={handleScrutinizeRelease}
+                    >
+                      {isScrutinizing ? 'Submitting Recommendation...' : 'Submit Scrutiny Findings'}
+                    </button>
+                  </div>
+                )}
+
+                {/* 3. Approving Authority Panel */}
+                {(USERS[currentUserIdx].role === 'APPROVING_AUTHORITY' || USERS[currentUserIdx].role === 'ADMIN') && (
+                  <div className="release-action-panel" style={{ border: '1px solid rgba(245,158,11,0.4)', background: 'rgba(245,158,11,0.03)' }}>
+                    <div style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--accent-saffron)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <span>⚖️ Approving Authority Sanction Console</span>
+                    </div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
+                      Only the Approving Authority has the statutory power to sanction release or issue formal rejection.
+                    </div>
+
+                    {selectedInstrument.status === 'Released' ? (
+                      <div style={{ background: 'rgba(16,185,129,0.1)', padding: '0.85rem', borderRadius: '6px', border: '1px solid rgba(16,185,129,0.3)', color: '#34d399', fontSize: '0.85rem' }}>
+                        ✓ Formally Sanctioned & Released on {new Date(selectedInstrument.released_at || '').toLocaleString()} by {selectedInstrument.released_by_username || 'Authority'}. (Order: {selectedInstrument.release_order_reference})
+                      </div>
+                    ) : (
+                      <div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.8rem', marginBottom: '1rem' }}>
+                          <div>
+                            <label className="form-label">Sanction Order Reference *</label>
+                            <input
+                              type="text"
+                              className="form-input"
+                              placeholder="e.g. AICTE/FD/REL/2026/041"
+                              value={sanctionOrderRef}
+                              onChange={e => setSanctionOrderRef(e.target.value)}
+                            />
+                          </div>
+                          <div>
+                            <label className="form-label">Approval Authority Notes</label>
+                            <input
+                              type="text"
+                              className="form-input"
+                              placeholder="e.g. Sanctioned following satisfactory scrutiny and 8-yr tenure."
+                              value={sanctionNotes}
+                              onChange={e => setSanctionNotes(e.target.value)}
+                            />
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '0.8rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                          <button
+                            className="btn-primary"
+                            disabled={
+                              isSanctioning ||
+                              !selectedInstrument.release_checklist?.all_conditions_met ||
+                              !sanctionOrderRef.trim()
+                            }
+                            onClick={handleApproveRelease}
+                            style={{
+                              background: selectedInstrument.release_checklist?.all_conditions_met ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : '#475569',
+                              borderColor: '#10b981',
+                              cursor: selectedInstrument.release_checklist?.all_conditions_met ? 'pointer' : 'not-allowed',
+                            }}
+                          >
+                            {isSanctioning ? 'Sanctioning Order...' : '⚖️ Sanction & Release Deposit'}
+                          </button>
+
+                          <div style={{ display: 'flex', gap: '0.4rem', flex: 1, minWidth: '240px' }}>
+                            <input
+                              type="text"
+                              className="form-input"
+                              placeholder="Rejection reason if declining..."
+                              value={rejectionReasonInput}
+                              onChange={e => setRejectionReasonInput(e.target.value)}
+                              style={{ flex: 1, fontSize: '0.78rem' }}
+                            />
+                            <button
+                              className="btn-secondary"
+                              disabled={isRejecting || !rejectionReasonInput.trim()}
+                              onClick={handleRejectRelease}
+                              style={{ color: '#fb7185', borderColor: 'rgba(244,63,94,0.4)', fontSize: '0.78rem' }}
+                            >
+                              {isRejecting ? 'Rejecting...' : 'Reject Release'}
+                            </button>
+                          </div>
+                        </div>
+
+                        {!selectedInstrument.release_checklist?.all_conditions_met && (
+                          <div style={{ fontSize: '0.74rem', color: '#fb7185', marginTop: '0.6rem' }}>
+                            * Sanction button disabled until all 5 statutory preconditions are satisfied server-side.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
